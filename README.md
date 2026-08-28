@@ -18,7 +18,7 @@ Configure aliases in `~/.pi/agent/settings.json` or a trusted project's `.pi/set
 {
   "model-switcher": {
     "allowed": true,
-    "allow": "all",
+    "allowedModels": "all",
     "aliases": {
       "smart": {
         "model": "anthropic/claude-sonnet-4-5",
@@ -72,11 +72,13 @@ Refresh failures fall back to Pi's cached registry and are reported in the respo
 
 ### `model_switcher`
 
-Requires user authorization. Accepts an exact canonical `provider/model` identifier or exact configured alias. An alias sets both its model and thinking level. Alias presets never broaden Pi's native scope or bypass the extension allowlist.
+Requires user authorization. Accepts an exact canonical `provider/model` identifier or exact configured alias. An alias sets both its model and thinking level. Alias presets never broaden Pi's native scope or bypass the `allowedModels` policy.
 
 If the model is already active, an alias can change only the thinking level. An operation is a no-op only when both model and thinking level already match. Alias thinking takes precedence over native defaults and scoped thinking pins. Direct canonical switching retains native behavior.
 
 The target model must support the alias's exact thinking level. Unsupported combinations are rejected before any model or thinking mutation; Pi never clamps alias levels. The effective level is checked after application as a defensive invariant.
+
+After a successful state change, the extension shows one user-facing info notification. Model changes identify the previous and new models; same-model alias applications that change only thinking identify the previous and new thinking levels. No-op and failed operations do not notify. The notification is emitted only after the final state is verified and is not an additional agent message.
 
 ## Aliases
 
@@ -143,18 +145,18 @@ Allow every model in Pi's current native scope:
 {
   "model-switcher": {
     "allowed": true,
-    "allow": "all"
+    "allowedModels": "all"
   }
 }
 ```
 
-Narrow switching to an exact allowlist:
+Narrow switching to an exact `allowedModels` list:
 
 ```json
 {
   "model-switcher": {
     "allowed": true,
-    "allow": ["anthropic/claude-sonnet-4-5", "openai/gpt-5.4"],
+    "allowedModels": ["anthropic/claude-sonnet-4-5", "openai/gpt-5.4"],
     "aliases": {
       "smart": {
         "model": "anthropic/claude-sonnet-4-5",
@@ -167,7 +169,9 @@ Narrow switching to an exact allowlist:
 
 Pi's `enabledModels` setting and `--models` flag remain authoritative; this extension can only narrow that scope. Aliases likewise only name targets that already pass those policies.
 
-Invalid `allowed` settings deny switching. An invalid `allow` value permits no models; invalid array entries are ignored while valid entries remain. Invalid aliases are ignored as described above.
+Omitting `allowedModels` means `"all"`; an empty array permits no models. Array entries must be exact canonical identifiers, with invalid entries ignored and duplicates removed. An invalid `allowedModels` value permits no models. The separate `allowed` setting controls authorization, not the model policy.
+
+The old `allow` setting is unsupported and is never interpreted. If it is present in the effective trusted configuration, the extension warns and permits no models rather than widening the policy. Invalid aliases are ignored as described above.
 
 ## Installation and development
 
@@ -190,7 +194,7 @@ npm pack --dry-run
 
 ## Safety and scope
 
-The extension uses Pi's live model registry and native scope. It does not invent models, authenticate providers, bypass provider errors, or clamp alias thinking levels. Denied requests fail before refreshing or disclosing model and alias inventory. Alias resolution is exact and policy-preserving. Permission changes send hidden session context without triggering unsolicited agent turns.
+The extension uses Pi's live model registry and native scope. It does not invent models, authenticate providers, bypass provider errors, or clamp alias thinking levels. Denied requests fail before refreshing or disclosing model and alias inventory. Alias resolution is exact and policy-preserving; aliases cannot bypass the `allowedModels` policy. Permission changes send hidden session context without triggering unsolicited agent turns.
 
 ## License
 

@@ -18,17 +18,17 @@ export interface ModelAliasPreset {
 
 export interface ModelSwitcherSettings {
   allowed?: boolean;
-  allow?: "all" | string[];
+  allowedModels?: "all" | string[];
   aliases?: Record<string, ModelAliasPreset>;
 }
 
 export type PermissionSource = "default" | "config" | "flag" | "session";
 export type PermissionOverride = boolean | null;
-export type PermissionAllowPolicy = "all" | string[];
+export type AllowedModelsPolicy = "all" | string[];
 
 export interface ResolvedConfiguration {
   allowed: boolean | undefined;
-  allow: PermissionAllowPolicy;
+  allowedModels: AllowedModelsPolicy;
   aliases: Record<string, ModelAliasPreset>;
 }
 
@@ -191,19 +191,27 @@ export function normalizeAliases(
   return aliases;
 }
 
-function normalizeAllowPolicy(raw: unknown): {
-  allow: PermissionAllowPolicy;
+function normalizeAllowedModelsPolicy(raw: unknown): {
+  allowedModels: AllowedModelsPolicy;
   invalidType: boolean;
   invalidEntries: number;
 } {
   if (raw === undefined) {
-    return { allow: "all", invalidType: false, invalidEntries: 0 };
+    return {
+      allowedModels: "all",
+      invalidType: false,
+      invalidEntries: 0,
+    };
   }
   if (raw === "all") {
-    return { allow: "all", invalidType: false, invalidEntries: 0 };
+    return {
+      allowedModels: "all",
+      invalidType: false,
+      invalidEntries: 0,
+    };
   }
   if (!Array.isArray(raw)) {
-    return { allow: [], invalidType: true, invalidEntries: 0 };
+    return { allowedModels: [], invalidType: true, invalidEntries: 0 };
   }
 
   const valid: string[] = [];
@@ -220,12 +228,12 @@ function normalizeAllowPolicy(raw: unknown): {
     }
     if (!valid.includes(normalized)) valid.push(normalized);
   }
-  return { allow: valid, invalidType: false, invalidEntries };
+  return { allowedModels: valid, invalidType: false, invalidEntries };
 }
 
-/** Normalize an allow setting; invalid values fail closed to an empty set. */
-export function normalizeAllowlist(raw: unknown): PermissionAllowPolicy {
-  return normalizeAllowPolicy(raw).allow;
+/** Normalize allowed model identifiers; invalid values fail closed to an empty set. */
+export function normalizeAllowedModels(raw: unknown): AllowedModelsPolicy {
+  return normalizeAllowedModelsPolicy(raw).allowedModels;
 }
 
 /** Resolve the extension namespace after global/project settings have been loaded. */
@@ -246,11 +254,11 @@ export function resolveConfiguration(
 
   if (globalHasNamespace && !isRecord(globalNamespace)) {
     warnings.push("model-switcher: invalid settings namespace; denied.");
-    return { allowed: false, allow: [], aliases: {} };
+    return { allowed: false, allowedModels: [], aliases: {} };
   }
   if (projectHasNamespace && !isRecord(projectNamespace)) {
     warnings.push("model-switcher: invalid settings namespace; denied.");
-    return { allowed: false, allow: [], aliases: {} };
+    return { allowed: false, allowedModels: [], aliases: {} };
   }
 
   const merged: Record<string, unknown> = {
@@ -268,20 +276,28 @@ export function resolveConfiguration(
     }
   }
 
-  const allowResult = normalizeAllowPolicy(merged.allow);
-  if (allowResult.invalidType) {
+  const hasLegacyAllow = hasOwn(merged, "allow");
+  if (hasLegacyAllow) {
     warnings.push(
-      "model-switcher: invalid allow setting; no models permitted.",
+      'model-switcher: unsupported "allow" setting; use "allowedModels". No models permitted.',
     );
-  } else if (allowResult.invalidEntries > 0) {
+  }
+  const allowedModelsResult = normalizeAllowedModelsPolicy(
+    hasLegacyAllow ? [] : merged.allowedModels,
+  );
+  if (allowedModelsResult.invalidType) {
     warnings.push(
-      "model-switcher: invalid allowlist entries ignored; valid entries retained.",
+      "model-switcher: invalid allowedModels setting; no models permitted.",
+    );
+  } else if (allowedModelsResult.invalidEntries > 0) {
+    warnings.push(
+      "model-switcher: invalid allowedModels entries ignored; valid entries retained.",
     );
   }
 
   return {
     allowed,
-    allow: allowResult.allow,
+    allowedModels: allowedModelsResult.allowedModels,
     aliases: normalizeAliases(merged.aliases, warnings),
   };
 }
@@ -366,10 +382,10 @@ function sortCandidates(candidates: CandidateModel[]): CandidateModel[] {
   });
 }
 
-/** Build candidates from Pi's current native scope, then apply the exact extension allowlist. */
+/** Build candidates from Pi's current native scope, then apply allowedModels. */
 export function calculateCandidates(
   ctx: Pick<ExtensionContext, "modelRegistry" | "scopedModels">,
-  allow: PermissionAllowPolicy,
+  allowedModels: AllowedModelsPolicy,
   availableModels?: readonly CandidateModel["model"][],
 ): CandidateCalculation {
   const available = [
@@ -400,10 +416,10 @@ export function calculateCandidates(
   }
 
   const candidates = sortCandidates(
-    allow === "all"
+    allowedModels === "all"
       ? nativeCandidates
       : nativeCandidates.filter((candidate) =>
-          allow.includes(canonicalModel(candidate.model)),
+          allowedModels.includes(canonicalModel(candidate.model)),
         ),
   );
   return { availableModels: available, nativeCandidates, candidates };
@@ -614,7 +630,7 @@ export function formatModelList(
         ? "No models match the query."
         : details.noModelsReason === "available"
           ? "No currently available/authenticated models."
-          : "No models permitted by current native scope/allow policy.",
+          : "No models permitted by current native scope/allowedModels policy.",
     );
   }
   return { text: lines.join("\n"), details };
@@ -623,6 +639,10 @@ export function formatModelList(
 function reportWarning(ctx: ExtensionContext, message: string): void {
   if (ctx.hasUI) ctx.ui.notify(message, "warning");
   else console.warn(message);
+}
+
+function notifyModelSwitch(ctx: ExtensionContext, message: string): void {
+  if (ctx.hasUI) ctx.ui.notify(message, "info");
 }
 
 function loadConfiguration(ctx: ExtensionContext): ResolvedConfiguration {
@@ -635,7 +655,7 @@ function loadConfiguration(ctx: ExtensionContext): ResolvedConfiguration {
     const managerErrors = manager.drainErrors();
     if (managerErrors.length > 0) {
       reportWarning(ctx, "model-switcher: settings could not be read; denied.");
-      return { allowed: false, allow: [], aliases: {} };
+      return { allowed: false, allowedModels: [], aliases: {} };
     }
     const configuration = resolveConfiguration(
       manager.getGlobalSettings(),
@@ -647,7 +667,7 @@ function loadConfiguration(ctx: ExtensionContext): ResolvedConfiguration {
     return configuration;
   } catch {
     reportWarning(ctx, "model-switcher: settings could not be read; denied.");
-    return { allowed: false, allow: [], aliases: {} };
+    return { allowed: false, allowedModels: [], aliases: {} };
   }
 }
 
@@ -703,7 +723,9 @@ function hasAllowedModels(
   ctx: ExtensionContext,
   configuration: ResolvedConfiguration,
 ): boolean {
-  return calculateCandidates(ctx, configuration.allow).candidates.length > 0;
+  return (
+    calculateCandidates(ctx, configuration.allowedModels).candidates.length > 0
+  );
 }
 
 function permissionEntry(override: boolean | null): PermissionEntry {
@@ -796,7 +818,11 @@ export function modelSwitcherCompletions(
 
 export default function modelSwitcherExtension(pi: ExtensionAPI): void {
   const state: RuntimeState = {
-    configuration: { allowed: undefined, allow: "all", aliases: {} },
+    configuration: {
+      allowed: undefined,
+      allowedModels: "all",
+      aliases: {},
+    },
     sessionOverride: null,
     flagAllow: false,
     flagDeny: false,
@@ -866,7 +892,10 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       assertAuthorized(pi, state, ctx);
       const refresh = await refreshModels(ctx.modelRegistry, signal);
-      const calculation = calculateCandidates(ctx, state.configuration.allow);
+      const calculation = calculateCandidates(
+        ctx,
+        state.configuration.allowedModels,
+      );
       const aliases = calculateAliases(state.configuration.aliases);
       const query = params.query?.trim().toLowerCase() ?? "";
       const filteredAliases = aliases.filter((alias) => {
@@ -929,7 +958,10 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
       const requested = params.model.trim();
       const aliasTarget = state.configuration.aliases[requested];
       const resolved = aliasTarget?.model ?? requested;
-      const calculation = calculateCandidates(ctx, state.configuration.allow);
+      const calculation = calculateCandidates(
+        ctx,
+        state.configuration.allowedModels,
+      );
       const selected = calculation.candidates.find(
         (candidate) => canonicalModel(candidate.model) === resolved,
       );
@@ -947,7 +979,7 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
             ? "is unavailable"
             : !native.has(resolved)
               ? "is outside Pi's native scope"
-              : "is blocked by the allowlist";
+              : "is blocked by the allowedModels policy";
           throw new Error(
             `Alias "${requested}" maps to "${resolved}", which ${reason}. Call model_switcher_list to see current models and aliases.`,
           );
@@ -1007,6 +1039,10 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
             `Could not apply alias "${requested}"; requested thinking level "${requestedThinking}" but Pi applied "${thinking}".`,
           );
         }
+        notifyModelSwitch(
+          ctx,
+          `Thinking changed: ${resolved} · ${currentThinking} → ${thinking} · alias: ${requested}`,
+        );
         return {
           content: [
             {
@@ -1049,6 +1085,10 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
           `Could not apply alias "${requested}"; requested thinking level "${requestedThinking}" but Pi applied "${thinking}".`,
         );
       }
+      notifyModelSwitch(
+        ctx,
+        `Model switched: ${current ?? "unavailable"} → ${resolved} · thinking: ${thinking}${aliasTarget ? ` · alias: ${requested}` : ""}`,
+      );
       return {
         content: [
           {

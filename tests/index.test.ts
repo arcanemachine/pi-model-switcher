@@ -12,7 +12,7 @@ import {
   formatPermissionStatus,
   modelSwitcherCompletions,
   normalizeAliases,
-  normalizeAllowlist,
+  normalizeAllowedModels,
   normalizeCanonicalIdentifier,
   resolveConfiguration,
   resolvePermission,
@@ -40,12 +40,12 @@ describe("settings and permission policy", () => {
   it("defaults to denied and unrestricted", () => {
     expect(resolveConfiguration({}, {}, true)).toEqual({
       allowed: undefined,
-      allow: "all",
+      allowedModels: "all",
       aliases: {},
     });
     expect(
       resolvePermission(
-        { allowed: undefined, allow: "all", aliases: {} },
+        { allowed: undefined, allowedModels: "all", aliases: {} },
         null,
         false,
         false,
@@ -59,25 +59,30 @@ describe("settings and permission policy", () => {
   it("merges trusted project fields and replaces arrays", () => {
     expect(
       resolveConfiguration(
-        { "model-switcher": { allowed: true, allow: ["a/one", "a/two"] } },
-        { "model-switcher": { allow: ["b/three"] } },
+        {
+          "model-switcher": {
+            allowed: true,
+            allowedModels: ["a/one", "a/two"],
+          },
+        },
+        { "model-switcher": { allowedModels: ["b/three"] } },
         true,
       ),
-    ).toEqual({ allowed: true, allow: ["b/three"], aliases: {} });
+    ).toEqual({ allowed: true, allowedModels: ["b/three"], aliases: {} });
     expect(
       resolveConfiguration(
-        { "model-switcher": { allowed: true, allow: ["a/one"] } },
-        { "model-switcher": { allow: "all" } },
+        { "model-switcher": { allowed: true, allowedModels: ["a/one"] } },
+        { "model-switcher": { allowedModels: "all" } },
         true,
       ),
-    ).toEqual({ allowed: true, allow: "all", aliases: {} });
+    ).toEqual({ allowed: true, allowedModels: "all", aliases: {} });
     expect(
       resolveConfiguration(
         { "model-switcher": { allowed: true } },
         { "model-switcher": { allowed: false } },
         false,
       ),
-    ).toEqual({ allowed: true, allow: "all", aliases: {} });
+    ).toEqual({ allowed: true, allowedModels: "all", aliases: {} });
   });
 
   it("fails closed for invalid values and warns once for mixed entries", () => {
@@ -87,7 +92,7 @@ describe("settings and permission policy", () => {
         {
           "model-switcher": {
             allowed: "yes",
-            allow: [" a/one ", "", 42, "a/one", "b/two/with/slashes"],
+            allowedModels: [" a/one ", "", 42, "a/one", "b/two/with/slashes"],
           },
         },
         {},
@@ -96,15 +101,72 @@ describe("settings and permission policy", () => {
       ),
     ).toEqual({
       allowed: false,
-      allow: ["a/one", "b/two/with/slashes"],
+      allowedModels: ["a/one", "b/two/with/slashes"],
       aliases: {},
     });
     expect(warnings).toHaveLength(2);
-    expect(normalizeAllowlist("invalid")).toEqual([]);
-    expect(normalizeAllowlist(["provider/*"])).toEqual([]);
+    expect(normalizeAllowedModels("invalid")).toEqual([]);
+    expect(normalizeAllowedModels([])).toEqual([]);
+    expect(normalizeAllowedModels(["provider/*"])).toEqual([]);
+    const invalidTypeWarnings: string[] = [];
+    expect(
+      resolveConfiguration(
+        { "model-switcher": { allowedModels: 42 } },
+        {},
+        true,
+        invalidTypeWarnings,
+      ),
+    ).toEqual({ allowed: undefined, allowedModels: [], aliases: {} });
+    expect(invalidTypeWarnings).toEqual([
+      "model-switcher: invalid allowedModels setting; no models permitted.",
+    ]);
     expect(normalizeCanonicalIdentifier(" provider/model/id ")).toBe(
       "provider/model/id",
     );
+  });
+
+  it("rejects the legacy allow setting without widening allowedModels", () => {
+    const warnings: string[] = [];
+    expect(
+      resolveConfiguration(
+        {
+          "model-switcher": {
+            allowed: true,
+            allow: ["a/one"],
+            allowedModels: "all",
+          },
+        },
+        {},
+        true,
+        warnings,
+      ),
+    ).toEqual({ allowed: true, allowedModels: [], aliases: {} });
+    expect(warnings).toEqual([
+      'model-switcher: unsupported "allow" setting; use "allowedModels". No models permitted.',
+    ]);
+
+    const projectWarnings: string[] = [];
+    expect(
+      resolveConfiguration(
+        { "model-switcher": { allowedModels: ["a/one"] } },
+        { "model-switcher": { allow: ["b/two"] } },
+        true,
+        projectWarnings,
+      ),
+    ).toEqual({ allowed: undefined, allowedModels: [], aliases: {} });
+    expect(projectWarnings).toHaveLength(1);
+
+    expect(
+      resolveConfiguration(
+        { "model-switcher": { allowedModels: ["a/one"] } },
+        { "model-switcher": { allow: ["b/two"] } },
+        false,
+      ),
+    ).toEqual({
+      allowed: undefined,
+      allowedModels: ["a/one"],
+      aliases: {},
+    });
   });
 
   it("normalizes aliases and lets trusted project aliases replace global aliases", () => {
@@ -137,7 +199,7 @@ describe("settings and permission policy", () => {
       ),
     ).toEqual({
       allowed: undefined,
-      allow: "all",
+      allowedModels: "all",
       aliases: {
         smart: { model: "provider/model/id", thinkingLevel: "high" },
         worker: { model: "provider/worker", thinkingLevel: "medium" },
@@ -197,14 +259,14 @@ describe("settings and permission policy", () => {
       ),
     ).toEqual({
       allowed: undefined,
-      allow: "all",
+      allowedModels: "all",
       aliases: {
         smart: { model: "global/model", thinkingLevel: "high" },
       },
     });
   });
 
-  it("rejects an invalid namespace and does not warn for missing allow", () => {
+  it("rejects an invalid namespace and does not warn for missing allowedModels", () => {
     const invalidWarnings: string[] = [];
     expect(
       resolveConfiguration(
@@ -213,22 +275,26 @@ describe("settings and permission policy", () => {
         true,
         invalidWarnings,
       ),
-    ).toEqual({ allowed: false, allow: [], aliases: {} });
+    ).toEqual({ allowed: false, allowedModels: [], aliases: {} });
     expect(invalidWarnings).toHaveLength(1);
-    const missingAllowWarnings: string[] = [];
+    const missingAllowedModelsWarnings: string[] = [];
     expect(
       resolveConfiguration(
         { "model-switcher": { allowed: true } },
         {},
         true,
-        missingAllowWarnings,
+        missingAllowedModelsWarnings,
       ),
-    ).toEqual({ allowed: true, allow: "all", aliases: {} });
-    expect(missingAllowWarnings).toEqual([]);
+    ).toEqual({ allowed: true, allowedModels: "all", aliases: {} });
+    expect(missingAllowedModelsWarnings).toEqual([]);
   });
 
   it("applies session, deny-wins flags, config, and default precedence", () => {
-    const config = { allowed: true, allow: "all" as const, aliases: {} };
+    const config = {
+      allowed: true,
+      allowedModels: "all" as const,
+      aliases: {},
+    };
     expect(resolvePermission(config, null, false, false)).toEqual({
       allowed: true,
       source: "config",
@@ -278,7 +344,7 @@ describe("session entries and candidate calculation", () => {
     ).toEqual({ version: 1, override: "denied" });
   });
 
-  it("uses native scope, reconciles current models, intersects exact allowlists, and sorts", () => {
+  it("uses native scope, reconciles current models, intersects exact allowedModels, and sorts", () => {
     const one = model("z", "model/one");
     const two = model("a", "model/two", "Two");
     const unavailable = model("x", "gone");
@@ -310,7 +376,7 @@ describe("session entries and candidate calculation", () => {
     expect(unrestricted.candidates.map((entry) => entry.model.id)).toEqual([]);
   });
 
-  it("classifies aliases by availability, scope, and allowlist", () => {
+  it("classifies aliases by availability, scope, and allowedModels", () => {
     const one = model("a", "one");
     const two = model("b", "two");
     const aliases = {
@@ -356,7 +422,7 @@ async function extensionHarness(
       }
     >;
     applyThinking?: boolean;
-    allow?: "all" | string[];
+    allowedModels?: "all" | string[];
   } = {},
 ) {
   const models = options.models ?? [model("a", "one"), model("b", "two")];
@@ -377,7 +443,9 @@ async function extensionHarness(
     drainErrors: () => [],
     getGlobalSettings: () => ({
       "model-switcher": {
-        ...(options.allow !== undefined ? { allow: options.allow } : {}),
+        ...(options.allowedModels !== undefined
+          ? { allowedModels: options.allowedModels }
+          : {}),
         ...(options.aliases !== undefined ? { aliases: options.aliases } : {}),
       },
     }),
@@ -594,20 +662,29 @@ describe("autocomplete and extension registration", () => {
       scopedModels: [{ model: two, thinkingLevel: "low" }],
     });
     await harness.commands.get("model-switcher").handler("allow", harness.ctx);
+    const notify = harness.ctx.ui.notify as ReturnType<typeof vi.fn>;
+    notify.mockClear();
     const switched = await harness.tools
       .get("model_switcher")
       .execute("id", { model: " b/two " }, undefined, undefined, harness.ctx);
     expect(switched.content[0].text).toContain("Switched to b/two");
+    expect(notify).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledWith(
+      "Model switched: a/one → b/two · thinking: low",
+      "info",
+    );
     expect(harness.setModel).toHaveBeenCalledWith(two);
     expect(harness.setThinkingLevel).toHaveBeenCalledWith("low");
 
     (harness.ctx as { model: unknown }).model = two;
     harness.setModel.mockClear();
+    notify.mockClear();
     const noop = await harness.tools
       .get("model_switcher")
       .execute("id", { model: "b/two" }, undefined, undefined, harness.ctx);
     expect(noop.details.noop).toBe(true);
     expect(harness.setModel).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it("switches through aliases, reports no-ops, and enforces model policy", async () => {
@@ -620,9 +697,11 @@ describe("autocomplete and extension registration", () => {
         smart: { model: "b/two", thinkingLevel: "high" },
         blocked: { model: "a/one", thinkingLevel: "medium" },
       },
-      allow: ["b/two"],
+      allowedModels: ["b/two"],
     });
     await harness.commands.get("model-switcher").handler("allow", harness.ctx);
+    const notify = harness.ctx.ui.notify as ReturnType<typeof vi.fn>;
+    notify.mockClear();
 
     const switched = await harness.tools
       .get("model_switcher")
@@ -638,9 +717,15 @@ describe("autocomplete and extension registration", () => {
     });
     expect(harness.setModel).toHaveBeenCalledWith(two);
     expect(harness.setThinkingLevel).toHaveBeenCalledWith("high");
+    expect(notify).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledWith(
+      "Model switched: a/one → b/two · thinking: high · alias: smart",
+      "info",
+    );
 
     (harness.ctx as { model: unknown }).model = two;
     harness.setModel.mockClear();
+    notify.mockClear();
     const noop = await harness.tools
       .get("model_switcher")
       .execute("id", { model: "smart" }, undefined, undefined, harness.ctx);
@@ -649,6 +734,7 @@ describe("autocomplete and extension registration", () => {
     );
     expect(noop.details.noop).toBe(true);
     expect(harness.setModel).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
 
     await expect(
       harness.tools
@@ -656,6 +742,7 @@ describe("autocomplete and extension registration", () => {
         .execute("id", { model: "blocked" }, undefined, undefined, harness.ctx),
     ).rejects.toThrow('Alias "blocked" maps to "a/one"');
     expect(harness.setModel).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it("changes thinking for same-model aliases and rejects unsupported presets before mutation", async () => {
@@ -668,6 +755,8 @@ describe("autocomplete and extension registration", () => {
       },
     });
     await harness.commands.get("model-switcher").handler("allow", harness.ctx);
+    const notify = harness.ctx.ui.notify as ReturnType<typeof vi.fn>;
+    notify.mockClear();
 
     const changed = await harness.tools
       .get("model_switcher")
@@ -684,8 +773,14 @@ describe("autocomplete and extension registration", () => {
     });
     expect(harness.setModel).not.toHaveBeenCalled();
     expect(harness.setThinkingLevel).toHaveBeenCalledWith("low");
+    expect(notify).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledWith(
+      "Thinking changed: a/one · high → low · alias: deep",
+      "info",
+    );
 
     harness.setThinkingLevel.mockClear();
+    notify.mockClear();
     await expect(
       harness.tools
         .get("model_switcher")
@@ -699,6 +794,7 @@ describe("autocomplete and extension registration", () => {
     ).rejects.toThrow("does not support it");
     expect(harness.setModel).not.toHaveBeenCalled();
     expect(harness.setThinkingLevel).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it("reports graceful alias and provider failures without false success", async () => {
@@ -711,6 +807,10 @@ describe("autocomplete and extension registration", () => {
     await unavailable.commands
       .get("model-switcher")
       .handler("allow", unavailable.ctx);
+    const unavailableNotify = unavailable.ctx.ui.notify as ReturnType<
+      typeof vi.fn
+    >;
+    unavailableNotify.mockClear();
     await expect(
       unavailable.tools
         .get("model_switcher")
@@ -723,6 +823,7 @@ describe("autocomplete and extension registration", () => {
         ),
     ).rejects.toThrow("which is unavailable");
     expect(unavailable.setModel).not.toHaveBeenCalled();
+    expect(unavailableNotify).not.toHaveBeenCalled();
 
     const outside = await extensionHarness({
       models: [one, two],
@@ -730,25 +831,35 @@ describe("autocomplete and extension registration", () => {
       aliases: { outside: { model: "b/two", thinkingLevel: "high" } },
     });
     await outside.commands.get("model-switcher").handler("allow", outside.ctx);
+    const outsideNotify = outside.ctx.ui.notify as ReturnType<typeof vi.fn>;
+    outsideNotify.mockClear();
     await expect(
       outside.tools
         .get("model_switcher")
         .execute("id", { model: "outside" }, undefined, undefined, outside.ctx),
     ).rejects.toThrow("outside Pi's native scope");
     expect(outside.setModel).not.toHaveBeenCalled();
+    expect(outsideNotify).not.toHaveBeenCalled();
 
     const unknown = await extensionHarness({ models: [one] });
     await unknown.commands.get("model-switcher").handler("allow", unknown.ctx);
+    const unknownNotify = unknown.ctx.ui.notify as ReturnType<typeof vi.fn>;
+    unknownNotify.mockClear();
     await expect(
       unknown.tools
         .get("model_switcher")
         .execute("id", { model: "mystery" }, undefined, undefined, unknown.ctx),
     ).rejects.toThrow('Unknown model alias "mystery"');
+    expect(unknownNotify).not.toHaveBeenCalled();
 
     const providerFailure = await extensionHarness({ models: [one, two] });
     await providerFailure.commands
       .get("model-switcher")
       .handler("allow", providerFailure.ctx);
+    const providerNotify = providerFailure.ctx.ui.notify as ReturnType<
+      typeof vi.fn
+    >;
+    providerNotify.mockClear();
     providerFailure.setModel.mockRejectedValueOnce(new Error("auth"));
     await expect(
       providerFailure.tools
@@ -761,6 +872,7 @@ describe("autocomplete and extension registration", () => {
           providerFailure.ctx,
         ),
     ).rejects.toThrow("Could not switch");
+    expect(providerNotify).not.toHaveBeenCalled();
   });
 
   it("rejects unexpected effective thinking levels after alias application", async () => {
@@ -772,6 +884,8 @@ describe("autocomplete and extension registration", () => {
       aliases: { deep: { model: "b/two", thinkingLevel: "low" } },
     });
     await harness.commands.get("model-switcher").handler("allow", harness.ctx);
+    const notify = harness.ctx.ui.notify as ReturnType<typeof vi.fn>;
+    notify.mockClear();
     await expect(
       harness.tools
         .get("model_switcher")
@@ -779,6 +893,7 @@ describe("autocomplete and extension registration", () => {
     ).rejects.toThrow("Could not apply alias");
     expect(harness.setModel).toHaveBeenCalledWith(two);
     expect(harness.setThinkingLevel).toHaveBeenCalledWith("low");
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it("rejects disallowed targets and does not claim false native switches", async () => {
