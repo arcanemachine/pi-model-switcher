@@ -66,7 +66,7 @@ export interface ModelListDetails {
   returned: string[];
   totalMatches: number;
   truncated: boolean;
-  noModelsReason?: "scope" | "query" | "available";
+  noModelsReason?: "scope" | "available";
   aliases: Record<string, ModelAliasPreset>;
   totalAliasMatches: number;
   aliasesTruncated: boolean;
@@ -524,9 +524,7 @@ function refreshNote(outcome: RefreshOutcome): string | undefined {
 
 function noModelsReason(
   calculation: CandidateCalculation,
-  query: string,
 ): ModelListDetails["noModelsReason"] {
-  if (query && calculation.candidates.length > 0) return "query";
   if (calculation.candidates.length === 0) {
     return calculation.availableModels.length === 0 ? "available" : "scope";
   }
@@ -565,7 +563,6 @@ export function formatModelList(
   current: string | undefined,
   candidates: readonly CandidateModel[],
   totalMatches: number,
-  query: string,
   refreshFallback: boolean,
   emptyReason?: ModelListDetails["noModelsReason"],
   aliases: readonly ModelAlias[] = [],
@@ -591,14 +588,11 @@ export function formatModelList(
       ? {
           noModelsReason:
             emptyReason ??
-            noModelsReason(
-              {
-                availableModels: [],
-                nativeCandidates: [],
-                candidates: [...candidates],
-              },
-              query,
-            ),
+            noModelsReason({
+              availableModels: [],
+              nativeCandidates: [],
+              candidates: [...candidates],
+            }),
         }
       : {}),
   };
@@ -606,14 +600,10 @@ export function formatModelList(
   const lines: string[] = [`Current: ${current ?? "unavailable"}`];
   lines.push(`Aliases (${totalAliasMatches}):`);
   if (limitedAliases.length > 0) lines.push(...limitedAliases.map(formatAlias));
-  if (totalAliasMatches === 0) {
-    lines.push(
-      query ? "No aliases match the query." : "No aliases configured.",
-    );
-  }
+  if (totalAliasMatches === 0) lines.push("No aliases configured.");
   if (totalAliasMatches > limitedAliases.length) {
     lines.push(
-      `Showing ${limitedAliases.length} of ${totalAliasMatches} aliases; call model_switcher_list with a narrower query.`,
+      `Showing ${limitedAliases.length} of ${totalAliasMatches} aliases; output capped at 200.`,
     );
   }
 
@@ -621,16 +611,14 @@ export function formatModelList(
   if (limited.length > 0) lines.push(...limited.map(formatCandidate));
   if (totalMatches > limited.length) {
     lines.push(
-      `Showing ${limited.length} of ${totalMatches} models; call model_switcher_list with a narrower query.`,
+      `Showing ${limited.length} of ${totalMatches} models; output capped at 200.`,
     );
   }
   if (totalMatches === 0) {
     lines.push(
-      details.noModelsReason === "query"
-        ? "No models match the query."
-        : details.noModelsReason === "available"
-          ? "No currently available/authenticated models."
-          : "No models permitted by current native scope/allowedModels policy.",
+      details.noModelsReason === "available"
+        ? "No currently available/authenticated models."
+        : "No models permitted by current native scope/allowedModels policy.",
     );
   }
   return { text: lines.join("\n"), details };
@@ -880,11 +868,9 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
     label: "List Models and Aliases",
     description:
       "List available models and configured aliases for model_switcher. Requires user authorization for agent-driven model switching.",
-    parameters: Type.Object({
-      query: Type.Optional(Type.String()),
-    }),
+    parameters: Type.Object({}),
     executionMode: "sequential",
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+    async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
       assertAuthorized(pi, state, ctx);
       const refresh = await refreshModels(ctx.modelRegistry, signal);
       const calculation = calculateCandidates(
@@ -892,36 +878,17 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
         state.configuration.allowedModels,
       );
       const aliases = calculateAliases(state.configuration.aliases);
-      const query = params.query?.trim().toLowerCase() ?? "";
-      const filteredAliases = aliases.filter((alias) => {
-        if (!query) return true;
-        return (
-          alias.alias.toLowerCase().includes(query) ||
-          alias.model.toLowerCase().includes(query) ||
-          alias.thinkingLevel.toLowerCase().includes(query)
-        );
-      });
-      const filtered = calculation.candidates.filter((candidate) => {
-        if (!query) return true;
-        const canonical = canonicalModel(candidate.model).toLowerCase();
-        return (
-          canonical.includes(query) ||
-          displayName(candidate.model).toLowerCase().includes(query) ||
-          filteredAliases.some(
-            (alias) => alias.model.toLowerCase() === canonical,
-          )
-        );
-      });
       const current = ctx.model ? canonicalModel(ctx.model) : undefined;
       const result = formatModelList(
         current,
-        filtered,
-        filtered.length,
-        query,
+        calculation.candidates,
+        calculation.candidates.length,
         refresh.fallback,
-        filtered.length === 0 ? noModelsReason(calculation, query) : undefined,
-        filteredAliases,
-        filteredAliases.length,
+        calculation.candidates.length === 0
+          ? noModelsReason(calculation)
+          : undefined,
+        aliases,
+        aliases.length,
       );
       const note = refreshNote(refresh);
       return {

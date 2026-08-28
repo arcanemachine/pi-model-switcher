@@ -1,18 +1,55 @@
 # pi-model-switcher
 
-`pi-model-switcher` is a private, unreleased [Pi](https://pi.dev) extension for user-authorized agent-driven model switching. It reports the active model, lists Pi's currently permitted models, and switches by exact canonical identifier or configured alias.
+<p align="center">
+  <img src="https://raw.githubusercontent.com/arcanemachine/pi-model-switcher/main/logo.jpg" alt="pi-model-switcher logo" width="250" />
+</p>
 
-Loading the extension never grants permission. Switching is denied by default.
+A [Pi](https://pi.dev) extension for user-authorized agent-driven model switching.
+
+It reports the active model, lists Pi's currently permitted models and configured aliases, and switches by exact canonical identifier or alias. Loading the extension never grants permission: switching is denied by default, and only the user can allow it for a session.
+
+> Like this extension? See [my other Pi extensions](https://github.com/arcanemachine/pi-projects).
+
+## Requirements
+
+- Pi 0.84.1 or later
+- Node.js 22.19.0 or later for package development
+
+## Installation
+
+From GitHub:
+
+```bash
+pi install git:github.com/arcanemachine/pi-model-switcher
+```
+
+From npm:
+
+```bash
+pi install npm:@arcanemachine/pi-model-switcher
+```
+
+For local development:
+
+```bash
+pi -e ./src/index.ts
+```
 
 ## Quick start
 
-Ask the user to allow switching for the current session:
+Allow the agent to switch models for the current session:
 
 ```text
 /model-switcher allow
 ```
 
-Configure aliases in `~/.pi/agent/settings.json` or a trusted project's `.pi/settings.json`:
+Then have the agent list what is available and switch. The agent calls `model_switcher_list` to see models and aliases, then `model_switcher` with an exact identifier or alias:
+
+```json
+{ "model": "openai-codex/gpt-5.6-luna" }
+```
+
+Optionally configure aliases and a model policy in `~/.pi/agent/settings.json` or a trusted project's `.pi/settings.json`:
 
 ```json
 {
@@ -33,15 +70,13 @@ Configure aliases in `~/.pi/agent/settings.json` or a trusted project's `.pi/set
 }
 ```
 
-Aliases require both `model` and `thinkingLevel`. Valid thinking levels are exactly `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. There are no string aliases, inferred levels, fallbacks, or clamping.
-
-After authorization, call `model_switcher_list`, then pass an exact canonical identifier or alias to `model_switcher`:
+After authorization, an alias name works anywhere an exact model identifier works:
 
 ```json
 { "model": "smart" }
 ```
 
-An agent cannot authorize itself. If switching is denied, ask the user to run `/model-switcher allow`.
+An agent cannot authorize itself. If switching is denied, the agent should ask you to run `/model-switcher allow`.
 
 ## Tools
 
@@ -49,11 +84,11 @@ The extension always registers exactly three sequential tools. Permission change
 
 ### `model_switcher_whoami`
 
-Always available and read-only. Reports the live `provider/model` identifier and thinking level from Pi. When switching is denied, it includes a reminder to ask the user for authorization.
+Always available and read-only. Reports the live model and thinking level as `model (thinkingLevel)`. When switching is denied, it includes a reminder to ask the user for authorization.
 
 ### `model_switcher_list`
 
-Requires user authorization. Refreshes Pi's model registry and lists aliases and available models together. The optional `query` filters aliases by name, model, or thinking level, and models by canonical identifier or display name. A query matching an alias also includes its permitted target model.
+Requires user authorization. Refreshes Pi's model registry and lists all configured aliases and currently permitted models together. It takes no arguments. Aliases are shown with their configured targets, including targets that are unavailable or blocked by current policy, so the agent can distinguish configuration from availability.
 
 Aliases are sorted by name and models by provider/model. Each section is capped at 200 results. Structured alias details are keyed by alias name:
 
@@ -68,7 +103,7 @@ Aliases are sorted by name and models by provider/model. Each section is capped 
 }
 ```
 
-Refresh failures fall back to Pi's cached registry and are reported in the response. A query with no matches returns explicit empty sections.
+Refresh failures fall back to Pi's cached registry and are reported in the response. Empty sections explicitly distinguish no configured aliases from no currently available or permitted models.
 
 ### `model_switcher`
 
@@ -78,7 +113,7 @@ If the model is already active, an alias can change only the thinking level. An 
 
 The target model must support the alias's exact thinking level. Unsupported combinations are rejected before any model or thinking mutation; Pi never clamps alias levels. The effective level is checked after application as a defensive invariant.
 
-After a successful state change, the tool response reports the resulting model and thinking level. The extension does not emit a separate info notification, so the result is not duplicated. No-op and failed operations are not accompanied by a separate notification.
+After a successful state change, the tool response reports the resulting model and thinking level as `model (thinkingLevel)`, including the alias when one was used. The extension does not emit a separate info notification, so the result is not duplicated. No-op and failed operations are not accompanied by a separate notification.
 
 ## Aliases
 
@@ -173,28 +208,22 @@ Omitting `allowedModels` means `"all"`; an empty array permits no models. Array 
 
 The old `allow` setting is unsupported and is never interpreted. If it is present in the effective trusted configuration, the extension warns and permits no models rather than widening the policy. Invalid aliases are ignored as described above.
 
-## Installation and development
-
-This package is private (`0.0.0`) and has no npm installation or release path. For local development, install its declared dependencies and load the source entry point:
-
-```bash
-npm install --ignore-scripts --workspaces=false
-pi -e /path/to/pi-model-switcher/src/index.ts
-```
-
-Package checks:
-
-```bash
-npm run format:check
-npm run typecheck
-npm run test
-npm run build
-npm pack --dry-run
-```
-
 ## Safety and scope
 
 The extension uses Pi's live model registry and native scope. It does not invent models, authenticate providers, bypass provider errors, or clamp alias thinking levels. Denied requests fail before refreshing or disclosing model and alias inventory. Alias resolution is exact and policy-preserving; aliases cannot bypass the `allowedModels` policy. Permission changes send hidden session context without triggering unsolicited agent turns.
+
+## Development
+
+```bash
+npm install --ignore-scripts --workspaces=false
+npm run typecheck
+npm run test
+npm run build
+npm run format
+npm pack --dry-run
+```
+
+The package is source-loaded by Pi from `src/index.ts`; no compiled runtime artifact is required.
 
 ## License
 

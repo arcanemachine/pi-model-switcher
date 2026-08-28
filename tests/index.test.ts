@@ -565,28 +565,28 @@ describe("autocomplete and extension registration", () => {
     expect(allowed.content[0].text).not.toContain("not authorized");
   });
 
-  it("lists queried models, falls back to cache, and distinguishes empty queries", async () => {
+  it("lists all models and falls back to cache", async () => {
     const one = model("a", "one", "Alpha");
     const two = model("b", "two", "Beta");
     const harness = await extensionHarness({ models: [one, two] });
     await harness.commands.get("model-switcher").handler("allow", harness.ctx);
     const result = await harness.tools
       .get("model_switcher_list")
-      .execute("id", { query: "beta" }, undefined, undefined, harness.ctx);
-    expect(result.details.returned).toEqual(["b/two"]);
+      .execute("id", {}, undefined, undefined, harness.ctx);
+    expect(result.details.returned).toEqual(["a/one", "b/two"]);
+    expect(result.content[0].text).toContain("a/one — Alpha");
     expect(result.content[0].text).toContain("b/two — Beta");
 
     harness.refresh.mockRejectedValueOnce(new Error("offline"));
     const fallback = await harness.tools
       .get("model_switcher_list")
-      .execute("id", { query: "missing" }, undefined, undefined, harness.ctx);
+      .execute("id", {}, undefined, undefined, harness.ctx);
     expect(fallback.details.refreshFallback).toBe(true);
-    expect(fallback.details.noModelsReason).toBe("query");
-    expect(fallback.content[0].text).toContain("No models match the query.");
+    expect(fallback.details.returned).toEqual(["a/one", "b/two"]);
     expect(fallback.content[0].text).toContain("showing cached models");
   });
 
-  it("lists models and aliases together with deterministic presets and query matching", async () => {
+  it("lists models and aliases together with deterministic presets", async () => {
     const one = model("a", "one", "Alpha");
     const two = model("b", "two", "Beta");
     const harness = await extensionHarness({
@@ -607,21 +607,6 @@ describe("autocomplete and extension registration", () => {
     expect(result.details.totalAliasMatches).toBe(2);
     expect(result.content[0].text).toContain("Aliases (2):");
     expect(result.content[0].text).toContain("- worker → b/two (high)");
-
-    const queried = await harness.tools
-      .get("model_switcher_list")
-      .execute("id", { query: "worker" }, undefined, undefined, harness.ctx);
-    expect(queried.details.returned).toEqual(["b/two"]);
-    expect(queried.details.totalAliasMatches).toBe(1);
-    expect(queried.content[0].text).toContain("Aliases (1):");
-
-    const thinkingQueried = await harness.tools
-      .get("model_switcher_list")
-      .execute("id", { query: "medium" }, undefined, undefined, harness.ctx);
-    expect(thinkingQueried.details.totalAliasMatches).toBe(1);
-    expect(thinkingQueried.details.aliases).toEqual({
-      missing: { model: "c/missing", thinkingLevel: "medium" },
-    });
   });
 
   it("caps models and aliases independently at 200 entries", async () => {
@@ -648,7 +633,7 @@ describe("autocomplete and extension registration", () => {
     expect(result.details.totalAliasMatches).toBe(205);
     expect(Object.keys(result.details.aliases)).toHaveLength(200);
     expect(result.details.aliasesTruncated).toBe(true);
-    expect(result.content[0].text).toContain("narrower query");
+    expect(result.content[0].text).toContain("output capped at 200");
   });
 
   it("switches exact scoped models, applies pinned thinking, and supports no-op", async () => {
