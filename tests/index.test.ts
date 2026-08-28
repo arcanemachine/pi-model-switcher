@@ -1,14 +1,17 @@
-import type {
-  ExtensionAPI,
-  ExtensionContext,
+import {
+  SettingsManager,
+  type ExtensionAPI,
+  type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import {
   MODEL_SWITCHER_PERMISSION_GUIDANCE,
+  calculateAliases,
   calculateCandidates,
   findLatestPermissionEntry,
   formatPermissionStatus,
   modelSwitcherCompletions,
+  normalizeAliases,
   normalizeAllowlist,
   normalizeCanonicalIdentifier,
   resolveConfiguration,
@@ -38,10 +41,11 @@ describe("settings and permission policy", () => {
     expect(resolveConfiguration({}, {}, true)).toEqual({
       allowed: undefined,
       allow: "all",
+      aliases: {},
     });
     expect(
       resolvePermission(
-        { allowed: undefined, allow: "all" },
+        { allowed: undefined, allow: "all", aliases: {} },
         null,
         false,
         false,
@@ -50,9 +54,6 @@ describe("settings and permission policy", () => {
       allowed: false,
       source: "default",
     });
-    expect(
-      resolveConfiguration({ "model-switcher": { enabled: true } }, {}, true),
-    ).toEqual({ allowed: undefined, allow: "all" });
   });
 
   it("merges trusted project fields and replaces arrays", () => {
@@ -62,21 +63,21 @@ describe("settings and permission policy", () => {
         { "model-switcher": { allow: ["b/three"] } },
         true,
       ),
-    ).toEqual({ allowed: true, allow: ["b/three"] });
+    ).toEqual({ allowed: true, allow: ["b/three"], aliases: {} });
     expect(
       resolveConfiguration(
         { "model-switcher": { allowed: true, allow: ["a/one"] } },
         { "model-switcher": { allow: "all" } },
         true,
       ),
-    ).toEqual({ allowed: true, allow: "all" });
+    ).toEqual({ allowed: true, allow: "all", aliases: {} });
     expect(
       resolveConfiguration(
         { "model-switcher": { allowed: true } },
         { "model-switcher": { allowed: false } },
         false,
       ),
-    ).toEqual({ allowed: true, allow: "all" });
+    ).toEqual({ allowed: true, allow: "all", aliases: {} });
   });
 
   it("fails closed for invalid values and warns once for mixed entries", () => {
@@ -93,13 +94,63 @@ describe("settings and permission policy", () => {
         true,
         warnings,
       ),
-    ).toEqual({ allowed: false, allow: ["a/one", "b/two/with/slashes"] });
+    ).toEqual({
+      allowed: false,
+      allow: ["a/one", "b/two/with/slashes"],
+      aliases: {},
+    });
     expect(warnings).toHaveLength(2);
     expect(normalizeAllowlist("invalid")).toEqual([]);
     expect(normalizeAllowlist(["provider/*"])).toEqual([]);
     expect(normalizeCanonicalIdentifier(" provider/model/id ")).toBe(
       "provider/model/id",
     );
+  });
+
+  it("normalizes aliases and lets trusted project aliases replace global aliases", () => {
+    const warnings: string[] = [];
+    expect(
+      resolveConfiguration(
+        {
+          "model-switcher": {
+            aliases: { smart: "global/model", worker: "global/worker" },
+          },
+        },
+        {
+          "model-switcher": {
+            aliases: {
+              " smart ": "provider/model/id",
+              BAD: "provider/bad",
+              worker: "provider/worker",
+              invalid: "not-canonical",
+            },
+          },
+        },
+        true,
+        warnings,
+      ),
+    ).toEqual({
+      allowed: undefined,
+      allow: "all",
+      aliases: { smart: "provider/model/id", worker: "provider/worker" },
+    });
+    expect(warnings).toHaveLength(2);
+    expect(normalizeAliases(undefined)).toEqual({});
+    expect(normalizeAliases({ "worker name": "provider/model" })).toEqual({});
+  });
+
+  it("ignores aliases from untrusted project settings", () => {
+    expect(
+      resolveConfiguration(
+        { "model-switcher": { aliases: { smart: "global/model" } } },
+        { "model-switcher": { aliases: { worker: "project/model" } } },
+        false,
+      ),
+    ).toEqual({
+      allowed: undefined,
+      allow: "all",
+      aliases: { smart: "global/model" },
+    });
   });
 
   it("rejects an invalid namespace and does not warn for missing allow", () => {
@@ -111,7 +162,7 @@ describe("settings and permission policy", () => {
         true,
         invalidWarnings,
       ),
-    ).toEqual({ allowed: false, allow: [] });
+    ).toEqual({ allowed: false, allow: [], aliases: {} });
     expect(invalidWarnings).toHaveLength(1);
     const missingAllowWarnings: string[] = [];
     expect(
@@ -121,12 +172,12 @@ describe("settings and permission policy", () => {
         true,
         missingAllowWarnings,
       ),
-    ).toEqual({ allowed: true, allow: "all" });
+    ).toEqual({ allowed: true, allow: "all", aliases: {} });
     expect(missingAllowWarnings).toEqual([]);
   });
 
   it("applies session, deny-wins flags, config, and default precedence", () => {
-    const config = { allowed: true, allow: "all" as const };
+    const config = { allowed: true, allow: "all" as const, aliases: {} };
     expect(resolvePermission(config, null, false, false)).toEqual({
       allowed: true,
       source: "config",
@@ -207,6 +258,42 @@ describe("session entries and candidate calculation", () => {
     );
     expect(unrestricted.candidates.map((entry) => entry.model.id)).toEqual([]);
   });
+
+  it("classifies aliases by availability, scope, and allowlist", () => {
+    const one = model("a", "one");
+    const two = model("b", "two");
+    const aliases = {
+      available: "a/one",
+      blocked: "b/two",
+      outside: "b/two",
+      missing: "c/missing",
+    };
+    const scoped = calculateCandidates(context([one, two], [{ model: one }]), [
+      "a/one",
+    ]);
+    expect(calculateAliases(aliases, scoped)).toEqual([
+      { alias: "available", target: "a/one", status: "available" },
+      {
+        alias: "blocked",
+        target: "b/two",
+        status: "outside-native-scope",
+      },
+      {
+        alias: "missing",
+        target: "c/missing",
+        status: "unavailable",
+      },
+      {
+        alias: "outside",
+        target: "b/two",
+        status: "outside-native-scope",
+      },
+    ]);
+    const blocked = calculateCandidates(context([one, two]), ["a/one"]);
+    expect(calculateAliases({ blocked: "b/two" }, blocked)).toEqual([
+      { alias: "blocked", target: "b/two", status: "blocked-by-allowlist" },
+    ]);
+  });
 });
 
 async function extensionHarness(
@@ -215,6 +302,8 @@ async function extensionHarness(
     scopedModels?: readonly ExtensionContext["scopedModels"][number][];
     flags?: Record<string, boolean>;
     branch?: readonly unknown[];
+    aliases?: Record<string, string>;
+    allow?: "all" | string[];
   } = {},
 ) {
   const models = options.models ?? [model("a", "one"), model("b", "two")];
@@ -228,6 +317,16 @@ async function extensionHarness(
   const setModel = vi.fn(async () => true);
   const setThinkingLevel = vi.fn();
   const refresh = vi.fn(async () => ({ aborted: false, errors: new Map() }));
+  vi.spyOn(SettingsManager, "create").mockReturnValue({
+    drainErrors: () => [],
+    getGlobalSettings: () => ({
+      "model-switcher": {
+        ...(options.allow !== undefined ? { allow: options.allow } : {}),
+        ...(options.aliases !== undefined ? { aliases: options.aliases } : {}),
+      },
+    }),
+    getProjectSettings: () => ({}),
+  } as never);
   const fakePi = {
     registerFlag: (name: string) => {
       if (!flagValues.has(name)) flagValues.set(name, false);
@@ -274,27 +373,24 @@ async function extensionHarness(
 
 describe("autocomplete and extension registration", () => {
   it("filters command completions and returns null for no matches", () => {
-    expect(modelSwitcherCompletions("al")).toHaveLength(1);
+    expect(modelSwitcherCompletions("allo")).toHaveLength(1);
+    expect(modelSwitcherCompletions("ali")).toHaveLength(1);
     expect(modelSwitcherCompletions("x")).toBeNull();
   });
 
-  it("does not accept legacy enable/disable command names", async () => {
-    const harness = await extensionHarness();
-    await harness.commands.get("model-switcher").handler("enable", harness.ctx);
+  it("shows aliases from the user command without changing permission", async () => {
+    const harness = await extensionHarness({
+      aliases: { worker: "b/two", smart: "a/one" },
+    });
     await harness.commands
       .get("model-switcher")
-      .handler("disable", harness.ctx);
-    expect(harness.ctx.ui.notify).toHaveBeenNthCalledWith(
-      1,
-      "Usage: /model-switcher [allow|deny]",
-      "error",
-    );
-    expect(harness.ctx.ui.notify).toHaveBeenNthCalledWith(
-      2,
-      "Usage: /model-switcher [allow|deny]",
-      "error",
+      .handler("aliases", harness.ctx);
+    expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+      "Model aliases:\n- smart → a/one\n- worker → b/two",
+      "info",
     );
     expect(harness.appendEntry).not.toHaveBeenCalled();
+    expect(harness.sendMessage).not.toHaveBeenCalled();
   });
 
   it("registers three stable sequential tools and gates list", async () => {
@@ -364,11 +460,44 @@ describe("autocomplete and extension registration", () => {
     expect(fallback.content[0].text).toContain("showing cached models");
   });
 
-  it("caps list output at 200 entries", async () => {
+  it("lists models and aliases together with deterministic status and query matching", async () => {
+    const one = model("a", "one", "Alpha");
+    const two = model("b", "two", "Beta");
+    const harness = await extensionHarness({
+      models: [one, two],
+      aliases: { worker: "b/two", missing: "c/missing" },
+    });
+    await harness.commands.get("model-switcher").handler("allow", harness.ctx);
+    const result = await harness.tools
+      .get("model_switcher_list")
+      .execute("id", {}, undefined, undefined, harness.ctx);
+    expect(result.details.aliases).toEqual([
+      { alias: "missing", target: "c/missing", status: "unavailable" },
+      { alias: "worker", target: "b/two", status: "available" },
+    ]);
+    expect(result.details.totalAliasMatches).toBe(2);
+    expect(result.content[0].text).toContain("Aliases (2):");
+    expect(result.content[0].text).toContain("- worker → b/two · available");
+
+    const queried = await harness.tools
+      .get("model_switcher_list")
+      .execute("id", { query: "worker" }, undefined, undefined, harness.ctx);
+    expect(queried.details.returned).toEqual(["b/two"]);
+    expect(queried.details.totalAliasMatches).toBe(1);
+    expect(queried.content[0].text).toContain("Aliases (1):");
+  });
+
+  it("caps models and aliases independently at 200 entries", async () => {
     const models = Array.from({ length: 205 }, (_, index) =>
       model("provider", `model-${String(index).padStart(3, "0")}`),
     );
-    const harness = await extensionHarness({ models });
+    const aliases = Object.fromEntries(
+      Array.from({ length: 205 }, (_, index) => [
+        `alias-${String(index).padStart(3, "0")}`,
+        `provider/model-${String(index).padStart(3, "0")}`,
+      ]),
+    );
+    const harness = await extensionHarness({ models, aliases });
     await harness.commands.get("model-switcher").handler("allow", harness.ctx);
     const result = await harness.tools
       .get("model_switcher_list")
@@ -376,6 +505,9 @@ describe("autocomplete and extension registration", () => {
     expect(result.details.totalMatches).toBe(205);
     expect(result.details.returned).toHaveLength(200);
     expect(result.details.truncated).toBe(true);
+    expect(result.details.totalAliasMatches).toBe(205);
+    expect(result.details.aliases).toHaveLength(200);
+    expect(result.details.aliasesTruncated).toBe(true);
     expect(result.content[0].text).toContain("narrower query");
   });
 
@@ -400,6 +532,49 @@ describe("autocomplete and extension registration", () => {
       .get("model_switcher")
       .execute("id", { model: "b/two" }, undefined, undefined, harness.ctx);
     expect(noop.details.noop).toBe(true);
+    expect(harness.setModel).not.toHaveBeenCalled();
+  });
+
+  it("switches through aliases, reports no-ops, and enforces model policy", async () => {
+    const one = model("a", "one");
+    const two = model("b", "two");
+    const harness = await extensionHarness({
+      models: [one, two],
+      aliases: { smart: "b/two", blocked: "a/one" },
+      allow: ["b/two"],
+    });
+    await harness.commands.get("model-switcher").handler("allow", harness.ctx);
+
+    const switched = await harness.tools
+      .get("model_switcher")
+      .execute("id", { model: "smart" }, undefined, undefined, harness.ctx);
+    expect(switched.content[0].text).toContain(
+      'Switched to b/two via alias "smart"',
+    );
+    expect(switched.details).toMatchObject({
+      model: "b/two",
+      requested: "smart",
+      alias: "smart",
+      noop: false,
+    });
+    expect(harness.setModel).toHaveBeenCalledWith(two);
+
+    (harness.ctx as { model: unknown }).model = two;
+    harness.setModel.mockClear();
+    const noop = await harness.tools
+      .get("model_switcher")
+      .execute("id", { model: "smart" }, undefined, undefined, harness.ctx);
+    expect(noop.content[0].text).toContain(
+      'Already using b/two via alias "smart"',
+    );
+    expect(noop.details.noop).toBe(true);
+    expect(harness.setModel).not.toHaveBeenCalled();
+
+    await expect(
+      harness.tools
+        .get("model_switcher")
+        .execute("id", { model: "blocked" }, undefined, undefined, harness.ctx),
+    ).rejects.toThrow('Alias "blocked" maps to "a/one"');
     expect(harness.setModel).not.toHaveBeenCalled();
   });
 
