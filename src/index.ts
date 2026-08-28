@@ -8,7 +8,7 @@ import { Type } from "typebox";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
 
 export interface ModelSwitcherSettings {
-  enabled?: boolean;
+  allowed?: boolean;
   allow?: "all" | string[];
 }
 
@@ -17,18 +17,18 @@ export type PermissionOverride = boolean | null;
 export type PermissionAllowPolicy = "all" | string[];
 
 export interface ResolvedConfiguration {
-  enabled: boolean | undefined;
+  allowed: boolean | undefined;
   allow: PermissionAllowPolicy;
 }
 
 export interface PermissionResolution {
-  enabled: boolean;
+  allowed: boolean;
   source: PermissionSource;
 }
 
 export interface PermissionEntry {
   version: 1;
-  override: "enabled" | "disabled" | "reset";
+  override: "allowed" | "denied" | "reset";
 }
 
 export interface CandidateModel {
@@ -61,12 +61,12 @@ const PERMISSION_CHANGE_MESSAGE_TYPE = "pi-model-switcher:permission-change";
 const REFRESH_TIMEOUT_MS = 15_000;
 
 export const MODEL_SWITCHER_PERMISSION_GUIDANCE =
-  "Agent-driven model switching is disabled for this session. Only the user can enable it with /model-switcher enable. If the user asked you to switch models, ask them to enable it; otherwise do not retry model_switcher_list or model_switcher.";
+  "Agent-driven model switching is denied for this session. Only the user can allow it with /model-switcher allow. If the user asked you to switch models, ask them to allow it; otherwise do not retry model_switcher_list or model_switcher.";
 
-const ENABLED_MESSAGE =
-  "Agent-driven model switching is now enabled for this session. You may use model_switcher_list and model_switcher when appropriate.";
-const DISABLED_MESSAGE =
-  "Agent-driven model switching is now disabled for this session. Do not use model_switcher_list or model_switcher unless the user enables it again.";
+const ALLOWED_MESSAGE =
+  "Agent-driven model switching is now allowed for this session. You may use model_switcher_list and model_switcher when appropriate.";
+const DENIED_MESSAGE =
+  "Agent-driven model switching is now denied for this session. Do not use model_switcher_list or model_switcher unless the user allows it again.";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -144,12 +144,12 @@ export function resolveConfiguration(
     : undefined;
 
   if (globalHasNamespace && !isRecord(globalNamespace)) {
-    warnings.push("model-switcher: invalid settings namespace; disabled.");
-    return { enabled: false, allow: [] };
+    warnings.push("model-switcher: invalid settings namespace; denied.");
+    return { allowed: false, allow: [] };
   }
   if (projectHasNamespace && !isRecord(projectNamespace)) {
-    warnings.push("model-switcher: invalid settings namespace; disabled.");
-    return { enabled: false, allow: [] };
+    warnings.push("model-switcher: invalid settings namespace; denied.");
+    return { allowed: false, allow: [] };
   }
 
   const merged: Record<string, unknown> = {
@@ -157,13 +157,13 @@ export function resolveConfiguration(
     ...(isRecord(projectNamespace) ? projectNamespace : {}),
   };
 
-  let enabled: boolean | undefined;
-  if (hasOwn(merged, "enabled")) {
-    if (typeof merged.enabled === "boolean") {
-      enabled = merged.enabled;
+  let allowed: boolean | undefined;
+  if (hasOwn(merged, "allowed")) {
+    if (typeof merged.allowed === "boolean") {
+      allowed = merged.allowed;
     } else {
-      warnings.push("model-switcher: invalid enabled setting; disabled.");
-      enabled = false;
+      warnings.push("model-switcher: invalid allowed setting; denied.");
+      allowed = false;
     }
   }
 
@@ -178,7 +178,7 @@ export function resolveConfiguration(
     );
   }
 
-  return { enabled, allow: allowResult.allow };
+  return { allowed, allow: allowResult.allow };
 }
 
 export function resolvePermission(
@@ -188,34 +188,34 @@ export function resolvePermission(
   flagDeny: boolean,
 ): PermissionResolution {
   if (sessionOverride !== null) {
-    return { enabled: sessionOverride, source: "session" };
+    return { allowed: sessionOverride, source: "session" };
   }
   if (flagDeny || flagAllow) {
-    return { enabled: !flagDeny, source: "flag" };
+    return { allowed: !flagDeny, source: "flag" };
   }
-  if (configuration.enabled !== undefined) {
-    return { enabled: configuration.enabled, source: "config" };
+  if (configuration.allowed !== undefined) {
+    return { allowed: configuration.allowed, source: "config" };
   }
-  return { enabled: false, source: "default" };
+  return { allowed: false, source: "default" };
 }
 
 export function formatPermissionStatus(
   permission: PermissionResolution,
   hasAllowedModels: boolean,
 ): string {
-  const state = permission.enabled ? "enabled" : "disabled";
+  const state = permission.allowed ? "allowed" : "denied";
   const source =
     permission.source === "default" ? "" : ` · source: ${permission.source}`;
   const empty =
-    permission.enabled && !hasAllowedModels ? " · allowed models: none" : "";
+    permission.allowed && !hasAllowedModels ? " · allowed models: none" : "";
   return `Agent-driven model switching: ${state}${source}${empty}`;
 }
 
 function permissionEntryFromData(data: unknown): PermissionEntry | undefined {
   if (!isRecord(data) || data.version !== 1) return undefined;
   if (
-    data.override !== "enabled" &&
-    data.override !== "disabled" &&
+    data.override !== "allowed" &&
+    data.override !== "denied" &&
     data.override !== "reset"
   ) {
     return undefined;
@@ -241,7 +241,7 @@ function permissionOverrideFromEntry(
   entry: PermissionEntry | undefined,
 ): PermissionOverride {
   if (!entry || entry.override === "reset") return null;
-  return entry.override === "enabled";
+  return entry.override === "allowed";
 }
 
 function canonicalModel(model: CandidateModel["model"]): string {
@@ -478,11 +478,8 @@ function loadConfiguration(ctx: ExtensionContext): ResolvedConfiguration {
     });
     const managerErrors = manager.drainErrors();
     if (managerErrors.length > 0) {
-      reportWarning(
-        ctx,
-        "model-switcher: settings could not be read; disabled.",
-      );
-      return { enabled: false, allow: [] };
+      reportWarning(ctx, "model-switcher: settings could not be read; denied.");
+      return { allowed: false, allow: [] };
     }
     const configuration = resolveConfiguration(
       manager.getGlobalSettings(),
@@ -493,8 +490,8 @@ function loadConfiguration(ctx: ExtensionContext): ResolvedConfiguration {
     for (const warning of warnings) reportWarning(ctx, warning);
     return configuration;
   } catch {
-    reportWarning(ctx, "model-switcher: settings could not be read; disabled.");
-    return { enabled: false, allow: [] };
+    reportWarning(ctx, "model-switcher: settings could not be read; denied.");
+    return { allowed: false, allow: [] };
   }
 }
 
@@ -542,7 +539,7 @@ function assertAuthorized(
 ): PermissionResolution {
   updateConfiguration(pi, state, ctx);
   const permission = currentPermission(pi, state);
-  if (!permission.enabled) throw new Error(MODEL_SWITCHER_PERMISSION_GUIDANCE);
+  if (!permission.allowed) throw new Error(MODEL_SWITCHER_PERMISSION_GUIDANCE);
   return permission;
 }
 
@@ -556,7 +553,7 @@ function hasAllowedModels(
 function permissionEntry(override: boolean | null): PermissionEntry {
   return {
     version: 1,
-    override: override === null ? "reset" : override ? "enabled" : "disabled",
+    override: override === null ? "reset" : override ? "allowed" : "denied",
   };
 }
 
@@ -620,15 +617,15 @@ export function modelSwitcherCompletions(
 ): AutocompleteItem[] | null {
   const commands: AutocompleteItem[] = [
     {
-      value: "enable",
-      label: "enable",
+      value: "allow",
+      label: "allow",
       description: "Allow the agent to list and switch models in this session",
     },
     {
-      value: "disable",
-      label: "disable",
+      value: "deny",
+      label: "deny",
       description:
-        "Prevent the agent from listing or switching models in this session",
+        "Deny the agent from listing or switching models in this session",
     },
   ];
   const needle = prefix.trimStart().toLowerCase();
@@ -638,7 +635,7 @@ export function modelSwitcherCompletions(
 
 export default function modelSwitcherExtension(pi: ExtensionAPI): void {
   const state: RuntimeState = {
-    configuration: { enabled: undefined, allow: "all" },
+    configuration: { allowed: undefined, allow: "all" },
     sessionOverride: null,
     flagAllow: false,
     flagDeny: false,
@@ -646,11 +643,11 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
 
   pi.registerFlag(FLAG_ALLOW, {
     type: "boolean",
-    description: "Enable agent-driven model switching for a new session.",
+    description: "Allow agent-driven model switching for a new session.",
   });
   pi.registerFlag(FLAG_DENY, {
     type: "boolean",
-    description: "Disable agent-driven model switching for a new session.",
+    description: "Deny agent-driven model switching for a new session.",
   });
 
   pi.registerTool({
@@ -673,9 +670,9 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
         lines.push(`Name: ${name}`);
       }
       lines.push(`Thinking: ${thinking}`);
-      if (!permission.enabled) {
+      if (!permission.allowed) {
         lines.push(
-          "Agent-driven model switching is not authorized for this session. Do not call model_switcher_list or model_switcher unless the user enables it with /model-switcher enable.",
+          "Agent-driven model switching is not allowed for this session. Do not call model_switcher_list or model_switcher unless the user allows it with /model-switcher allow.",
         );
       }
       return {
@@ -690,7 +687,7 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
             : {}),
           thinking,
           thinkingLevel: thinking,
-          switchingEnabled: permission.enabled,
+          switchingAllowed: permission.allowed,
         },
       };
     },
@@ -824,21 +821,21 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
         ctx.ui.notify(permissionStatus(pi, state, ctx), "info");
         return;
       }
-      if (command !== "enable" && command !== "disable") {
-        ctx.ui.notify("Usage: /model-switcher [enable|disable]", "error");
+      if (command !== "allow" && command !== "deny") {
+        ctx.ui.notify("Usage: /model-switcher [allow|deny]", "error");
         return;
       }
 
       updateConfiguration(pi, state, ctx);
-      const enabled = command === "enable";
-      setSessionOverride(pi, state, enabled);
+      const allowed = command === "allow";
+      setSessionOverride(pi, state, allowed);
       ctx.ui.notify(
-        enabled
-          ? "Agent-driven model switching enabled"
-          : "Agent-driven model switching disabled",
+        allowed
+          ? "Agent-driven model switching allowed"
+          : "Agent-driven model switching denied",
         "info",
       );
-      if (enabled && !hasAllowedModels(ctx, state.configuration)) {
+      if (allowed && !hasAllowedModels(ctx, state.configuration)) {
         ctx.ui.notify(
           "Current configuration allows no models for agent-driven model switching.",
           "warning",
@@ -847,7 +844,7 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
       pi.sendMessage(
         {
           customType: PERMISSION_CHANGE_MESSAGE_TYPE,
-          content: enabled ? ENABLED_MESSAGE : DISABLED_MESSAGE,
+          content: allowed ? ALLOWED_MESSAGE : DENIED_MESSAGE,
           display: false,
         },
         { triggerTurn: false },

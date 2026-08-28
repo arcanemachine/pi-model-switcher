@@ -34,46 +34,49 @@ function context(
 }
 
 describe("settings and permission policy", () => {
-  it("defaults to disabled and unrestricted", () => {
+  it("defaults to denied and unrestricted", () => {
     expect(resolveConfiguration({}, {}, true)).toEqual({
-      enabled: undefined,
+      allowed: undefined,
       allow: "all",
     });
     expect(
       resolvePermission(
-        { enabled: undefined, allow: "all" },
+        { allowed: undefined, allow: "all" },
         null,
         false,
         false,
       ),
     ).toEqual({
-      enabled: false,
+      allowed: false,
       source: "default",
     });
+    expect(
+      resolveConfiguration({ "model-switcher": { enabled: true } }, {}, true),
+    ).toEqual({ allowed: undefined, allow: "all" });
   });
 
   it("merges trusted project fields and replaces arrays", () => {
     expect(
       resolveConfiguration(
-        { "model-switcher": { enabled: true, allow: ["a/one", "a/two"] } },
+        { "model-switcher": { allowed: true, allow: ["a/one", "a/two"] } },
         { "model-switcher": { allow: ["b/three"] } },
         true,
       ),
-    ).toEqual({ enabled: true, allow: ["b/three"] });
+    ).toEqual({ allowed: true, allow: ["b/three"] });
     expect(
       resolveConfiguration(
-        { "model-switcher": { enabled: true, allow: ["a/one"] } },
+        { "model-switcher": { allowed: true, allow: ["a/one"] } },
         { "model-switcher": { allow: "all" } },
         true,
       ),
-    ).toEqual({ enabled: true, allow: "all" });
+    ).toEqual({ allowed: true, allow: "all" });
     expect(
       resolveConfiguration(
-        { "model-switcher": { enabled: true } },
-        { "model-switcher": { enabled: false } },
+        { "model-switcher": { allowed: true } },
+        { "model-switcher": { allowed: false } },
         false,
       ),
-    ).toEqual({ enabled: true, allow: "all" });
+    ).toEqual({ allowed: true, allow: "all" });
   });
 
   it("fails closed for invalid values and warns once for mixed entries", () => {
@@ -82,7 +85,7 @@ describe("settings and permission policy", () => {
       resolveConfiguration(
         {
           "model-switcher": {
-            enabled: "yes",
+            allowed: "yes",
             allow: [" a/one ", "", 42, "a/one", "b/two/with/slashes"],
           },
         },
@@ -90,7 +93,7 @@ describe("settings and permission policy", () => {
         true,
         warnings,
       ),
-    ).toEqual({ enabled: false, allow: ["a/one", "b/two/with/slashes"] });
+    ).toEqual({ allowed: false, allow: ["a/one", "b/two/with/slashes"] });
     expect(warnings).toHaveLength(2);
     expect(normalizeAllowlist("invalid")).toEqual([]);
     expect(normalizeAllowlist(["provider/*"])).toEqual([]);
@@ -108,39 +111,39 @@ describe("settings and permission policy", () => {
         true,
         invalidWarnings,
       ),
-    ).toEqual({ enabled: false, allow: [] });
+    ).toEqual({ allowed: false, allow: [] });
     expect(invalidWarnings).toHaveLength(1);
     const missingAllowWarnings: string[] = [];
     expect(
       resolveConfiguration(
-        { "model-switcher": { enabled: true } },
+        { "model-switcher": { allowed: true } },
         {},
         true,
         missingAllowWarnings,
       ),
-    ).toEqual({ enabled: true, allow: "all" });
+    ).toEqual({ allowed: true, allow: "all" });
     expect(missingAllowWarnings).toEqual([]);
   });
 
   it("applies session, deny-wins flags, config, and default precedence", () => {
-    const config = { enabled: true, allow: "all" as const };
+    const config = { allowed: true, allow: "all" as const };
     expect(resolvePermission(config, null, false, false)).toEqual({
-      enabled: true,
+      allowed: true,
       source: "config",
     });
     expect(resolvePermission(config, null, true, true)).toEqual({
-      enabled: false,
+      allowed: false,
       source: "flag",
     });
     expect(resolvePermission(config, true, false, true)).toEqual({
-      enabled: true,
+      allowed: true,
       source: "session",
     });
     expect(
-      formatPermissionStatus({ enabled: false, source: "default" }, true),
-    ).toBe("Agent-driven model switching: disabled");
+      formatPermissionStatus({ allowed: false, source: "default" }, true),
+    ).toBe("Agent-driven model switching: denied");
     expect(
-      formatPermissionStatus({ enabled: true, source: "session" }, false),
+      formatPermissionStatus({ allowed: true, source: "session" }, false),
     ).toContain("allowed models: none");
   });
 });
@@ -152,25 +155,25 @@ describe("session entries and candidate calculation", () => {
         {
           type: "custom",
           customType: "pi-model-switcher:permission",
-          data: { version: 1, override: "enabled" },
+          data: { version: 1, override: "allowed" },
         },
         {
           type: "custom",
           customType: "other",
-          data: { version: 1, override: "disabled" },
+          data: { version: 1, override: "denied" },
         },
         {
           type: "custom",
           customType: "pi-model-switcher:permission",
-          data: { version: 9, override: "disabled" },
+          data: { version: 9, override: "denied" },
         },
         {
           type: "custom",
           customType: "pi-model-switcher:permission",
-          data: { version: 1, override: "disabled" },
+          data: { version: 1, override: "denied" },
         },
       ]),
-    ).toEqual({ version: 1, override: "disabled" });
+    ).toEqual({ version: 1, override: "denied" });
   });
 
   it("uses native scope, reconciles current models, intersects exact allowlists, and sorts", () => {
@@ -271,8 +274,27 @@ async function extensionHarness(
 
 describe("autocomplete and extension registration", () => {
   it("filters command completions and returns null for no matches", () => {
-    expect(modelSwitcherCompletions("en")).toHaveLength(1);
+    expect(modelSwitcherCompletions("al")).toHaveLength(1);
     expect(modelSwitcherCompletions("x")).toBeNull();
+  });
+
+  it("does not accept legacy enable/disable command names", async () => {
+    const harness = await extensionHarness();
+    await harness.commands.get("model-switcher").handler("enable", harness.ctx);
+    await harness.commands
+      .get("model-switcher")
+      .handler("disable", harness.ctx);
+    expect(harness.ctx.ui.notify).toHaveBeenNthCalledWith(
+      1,
+      "Usage: /model-switcher [allow|deny]",
+      "error",
+    );
+    expect(harness.ctx.ui.notify).toHaveBeenNthCalledWith(
+      2,
+      "Usage: /model-switcher [allow|deny]",
+      "error",
+    );
+    expect(harness.appendEntry).not.toHaveBeenCalled();
   });
 
   it("registers three stable sequential tools and gates list", async () => {
@@ -310,22 +332,22 @@ describe("autocomplete and extension registration", () => {
       "Current model: anthropic/claude-sonnet-4-5",
     );
     expect(result.content[0].text).toContain("Thinking: high");
-    expect(result.content[0].text).toContain("not authorized");
-    expect(result.details.switchingEnabled).toBe(false);
+    expect(result.content[0].text).toContain("not allowed");
+    expect(result.details.switchingAllowed).toBe(false);
     expect(result.details.name).toBeUndefined();
 
-    await harness.commands.get("model-switcher").handler("enable", harness.ctx);
-    const enabled = await harness.tools
+    await harness.commands.get("model-switcher").handler("allow", harness.ctx);
+    const allowed = await harness.tools
       .get("model_switcher_whoami")
       .execute("id", {}, undefined, undefined, harness.ctx);
-    expect(enabled.content[0].text).not.toContain("not authorized");
+    expect(allowed.content[0].text).not.toContain("not authorized");
   });
 
   it("lists queried models, falls back to cache, and distinguishes empty queries", async () => {
     const one = model("a", "one", "Alpha");
     const two = model("b", "two", "Beta");
     const harness = await extensionHarness({ models: [one, two] });
-    await harness.commands.get("model-switcher").handler("enable", harness.ctx);
+    await harness.commands.get("model-switcher").handler("allow", harness.ctx);
     const result = await harness.tools
       .get("model_switcher_list")
       .execute("id", { query: "beta" }, undefined, undefined, harness.ctx);
@@ -347,7 +369,7 @@ describe("autocomplete and extension registration", () => {
       model("provider", `model-${String(index).padStart(3, "0")}`),
     );
     const harness = await extensionHarness({ models });
-    await harness.commands.get("model-switcher").handler("enable", harness.ctx);
+    await harness.commands.get("model-switcher").handler("allow", harness.ctx);
     const result = await harness.tools
       .get("model_switcher_list")
       .execute("id", {}, undefined, undefined, harness.ctx);
@@ -364,7 +386,7 @@ describe("autocomplete and extension registration", () => {
       models: [one, two],
       scopedModels: [{ model: two, thinkingLevel: "low" }],
     });
-    await harness.commands.get("model-switcher").handler("enable", harness.ctx);
+    await harness.commands.get("model-switcher").handler("allow", harness.ctx);
     const switched = await harness.tools
       .get("model_switcher")
       .execute("id", { model: " b/two " }, undefined, undefined, harness.ctx);
@@ -385,7 +407,7 @@ describe("autocomplete and extension registration", () => {
     const one = model("a", "one");
     const two = model("b", "two");
     const harness = await extensionHarness({ models: [one, two] });
-    await harness.commands.get("model-switcher").handler("enable", harness.ctx);
+    await harness.commands.get("model-switcher").handler("allow", harness.ctx);
     const originalRefresh = harness.refresh;
     await expect(
       harness.tools
@@ -411,7 +433,7 @@ describe("autocomplete and extension registration", () => {
     const inherited = {
       type: "custom",
       customType: "pi-model-switcher:permission",
-      data: { version: 1, override: "enabled" },
+      data: { version: 1, override: "allowed" },
     };
     const harness = await extensionHarness({
       branch: [inherited],
@@ -430,7 +452,7 @@ describe("autocomplete and extension registration", () => {
     expect(
       harness.ctx.ui.notify as ReturnType<typeof vi.fn>,
     ).toHaveBeenLastCalledWith(
-      "Agent-driven model switching: disabled · source: flag",
+      "Agent-driven model switching: denied · source: flag",
       "info",
     );
 
@@ -446,17 +468,15 @@ describe("autocomplete and extension registration", () => {
 
   it("uses exact notification levels and hidden permission messages", async () => {
     const harness = await extensionHarness();
-    await harness.commands.get("model-switcher").handler("enable", harness.ctx);
-    await harness.commands
-      .get("model-switcher")
-      .handler("disable", harness.ctx);
+    await harness.commands.get("model-switcher").handler("allow", harness.ctx);
+    await harness.commands.get("model-switcher").handler("deny", harness.ctx);
     const notify = harness.ctx.ui.notify as ReturnType<typeof vi.fn>;
     expect(notify).toHaveBeenCalledWith(
-      "Agent-driven model switching enabled",
+      "Agent-driven model switching allowed",
       "info",
     );
     expect(notify).toHaveBeenCalledWith(
-      "Agent-driven model switching disabled",
+      "Agent-driven model switching denied",
       "info",
     );
     expect(harness.sendMessage).toHaveBeenLastCalledWith(
