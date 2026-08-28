@@ -113,16 +113,22 @@ describe("settings and permission policy", () => {
       resolveConfiguration(
         {
           "model-switcher": {
-            aliases: { smart: "global/model", worker: "global/worker" },
+            aliases: {
+              smart: { model: "global/model", thinkingLevel: "high" },
+              worker: { model: "global/worker", thinkingLevel: "medium" },
+            },
           },
         },
         {
           "model-switcher": {
             aliases: {
-              " smart ": "provider/model/id",
-              BAD: "provider/bad",
-              worker: "provider/worker",
-              invalid: "not-canonical",
+              " smart ": {
+                model: "provider/model/id",
+                thinkingLevel: "high",
+              },
+              BAD: { model: "provider/bad", thinkingLevel: "high" },
+              worker: { model: "provider/worker", thinkingLevel: "medium" },
+              invalid: { model: "not-canonical", thinkingLevel: "high" },
             },
           },
         },
@@ -132,24 +138,69 @@ describe("settings and permission policy", () => {
     ).toEqual({
       allowed: undefined,
       allow: "all",
-      aliases: { smart: "provider/model/id", worker: "provider/worker" },
+      aliases: {
+        smart: { model: "provider/model/id", thinkingLevel: "high" },
+        worker: { model: "provider/worker", thinkingLevel: "medium" },
+      },
     });
     expect(warnings).toHaveLength(2);
     expect(normalizeAliases(undefined)).toEqual({});
-    expect(normalizeAliases({ "worker name": "provider/model" })).toEqual({});
+    expect(
+      normalizeAliases({
+        "worker name": { model: "provider/model", thinkingLevel: "high" },
+      }),
+    ).toEqual({});
+  });
+
+  it("requires strict model-and-thinking alias presets without fallbacks", () => {
+    const warnings: string[] = [];
+    expect(
+      normalizeAliases(
+        {
+          good: { model: "provider/model", thinkingLevel: "high" },
+          stringForm: "provider/model",
+          missingThinking: { model: "provider/model" },
+          extra: {
+            model: "provider/model",
+            thinkingLevel: "high",
+            note: "ignored",
+          },
+          badThinking: { model: "provider/model", thinkingLevel: "urgent" },
+          badModel: { model: "provider/*", thinkingLevel: "high" },
+        },
+        warnings,
+      ),
+    ).toEqual({
+      good: { model: "provider/model", thinkingLevel: "high" },
+    });
+    expect(warnings).toHaveLength(5);
   });
 
   it("ignores aliases from untrusted project settings", () => {
     expect(
       resolveConfiguration(
-        { "model-switcher": { aliases: { smart: "global/model" } } },
-        { "model-switcher": { aliases: { worker: "project/model" } } },
+        {
+          "model-switcher": {
+            aliases: {
+              smart: { model: "global/model", thinkingLevel: "high" },
+            },
+          },
+        },
+        {
+          "model-switcher": {
+            aliases: {
+              worker: { model: "project/model", thinkingLevel: "high" },
+            },
+          },
+        },
         false,
       ),
     ).toEqual({
       allowed: undefined,
       allow: "all",
-      aliases: { smart: "global/model" },
+      aliases: {
+        smart: { model: "global/model", thinkingLevel: "high" },
+      },
     });
   });
 
@@ -263,36 +314,24 @@ describe("session entries and candidate calculation", () => {
     const one = model("a", "one");
     const two = model("b", "two");
     const aliases = {
-      available: "a/one",
-      blocked: "b/two",
-      outside: "b/two",
-      missing: "c/missing",
+      available: { model: "a/one", thinkingLevel: "high" as const },
+      blocked: { model: "b/two", thinkingLevel: "high" as const },
+      outside: { model: "b/two", thinkingLevel: "high" as const },
+      missing: { model: "c/missing", thinkingLevel: "high" as const },
     };
     const scoped = calculateCandidates(context([one, two], [{ model: one }]), [
       "a/one",
     ]);
-    expect(calculateAliases(aliases, scoped)).toEqual([
-      { alias: "available", target: "a/one", status: "available" },
-      {
-        alias: "blocked",
-        target: "b/two",
-        status: "outside-native-scope",
-      },
-      {
-        alias: "missing",
-        target: "c/missing",
-        status: "unavailable",
-      },
-      {
-        alias: "outside",
-        target: "b/two",
-        status: "outside-native-scope",
-      },
+    expect(calculateAliases(aliases)).toEqual([
+      { alias: "available", model: "a/one", thinkingLevel: "high" },
+      { alias: "blocked", model: "b/two", thinkingLevel: "high" },
+      { alias: "missing", model: "c/missing", thinkingLevel: "high" },
+      { alias: "outside", model: "b/two", thinkingLevel: "high" },
     ]);
     const blocked = calculateCandidates(context([one, two]), ["a/one"]);
-    expect(calculateAliases({ blocked: "b/two" }, blocked)).toEqual([
-      { alias: "blocked", target: "b/two", status: "blocked-by-allowlist" },
-    ]);
+    expect(
+      calculateAliases({ blocked: { model: "b/two", thinkingLevel: "high" } }),
+    ).toEqual([{ alias: "blocked", model: "b/two", thinkingLevel: "high" }]);
   });
 });
 
@@ -302,7 +341,21 @@ async function extensionHarness(
     scopedModels?: readonly ExtensionContext["scopedModels"][number][];
     flags?: Record<string, boolean>;
     branch?: readonly unknown[];
-    aliases?: Record<string, string>;
+    aliases?: Record<
+      string,
+      {
+        model: string;
+        thinkingLevel:
+          | "off"
+          | "minimal"
+          | "low"
+          | "medium"
+          | "high"
+          | "xhigh"
+          | "max";
+      }
+    >;
+    applyThinking?: boolean;
     allow?: "all" | string[];
   } = {},
 ) {
@@ -315,7 +368,10 @@ async function extensionHarness(
   const appendEntry = vi.fn();
   const sendMessage = vi.fn();
   const setModel = vi.fn(async () => true);
-  const setThinkingLevel = vi.fn();
+  let thinkingLevel = "high";
+  const setThinkingLevel = vi.fn((level: string) => {
+    if (options.applyThinking !== false) thinkingLevel = level;
+  });
   const refresh = vi.fn(async () => ({ aborted: false, errors: new Map() }));
   vi.spyOn(SettingsManager, "create").mockReturnValue({
     drainErrors: () => [],
@@ -338,7 +394,7 @@ async function extensionHarness(
     appendEntry,
     sendMessage,
     setModel,
-    getThinkingLevel: vi.fn(() => "high"),
+    getThinkingLevel: vi.fn(() => thinkingLevel),
     setThinkingLevel,
     on: (event: string, handler: any) => handlers.set(event, handler),
   } as unknown as ExtensionAPI;
@@ -380,13 +436,16 @@ describe("autocomplete and extension registration", () => {
 
   it("shows aliases from the user command without changing permission", async () => {
     const harness = await extensionHarness({
-      aliases: { worker: "b/two", smart: "a/one" },
+      aliases: {
+        worker: { model: "b/two", thinkingLevel: "high" },
+        smart: { model: "a/one", thinkingLevel: "medium" },
+      },
     });
     await harness.commands
       .get("model-switcher")
       .handler("aliases", harness.ctx);
     expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
-      "Model aliases:\n- smart → a/one\n- worker → b/two",
+      "Model aliases:\n- smart → a/one · thinking: medium\n- worker → b/two · thinking: high",
       "info",
     );
     expect(harness.appendEntry).not.toHaveBeenCalled();
@@ -460,24 +519,29 @@ describe("autocomplete and extension registration", () => {
     expect(fallback.content[0].text).toContain("showing cached models");
   });
 
-  it("lists models and aliases together with deterministic status and query matching", async () => {
+  it("lists models and aliases together with deterministic presets and query matching", async () => {
     const one = model("a", "one", "Alpha");
     const two = model("b", "two", "Beta");
     const harness = await extensionHarness({
       models: [one, two],
-      aliases: { worker: "b/two", missing: "c/missing" },
+      aliases: {
+        worker: { model: "b/two", thinkingLevel: "high" },
+        missing: { model: "c/missing", thinkingLevel: "medium" },
+      },
     });
     await harness.commands.get("model-switcher").handler("allow", harness.ctx);
     const result = await harness.tools
       .get("model_switcher_list")
       .execute("id", {}, undefined, undefined, harness.ctx);
-    expect(result.details.aliases).toEqual([
-      { alias: "missing", target: "c/missing", status: "unavailable" },
-      { alias: "worker", target: "b/two", status: "available" },
-    ]);
+    expect(result.details.aliases).toEqual({
+      missing: { model: "c/missing", thinkingLevel: "medium" },
+      worker: { model: "b/two", thinkingLevel: "high" },
+    });
     expect(result.details.totalAliasMatches).toBe(2);
     expect(result.content[0].text).toContain("Aliases (2):");
-    expect(result.content[0].text).toContain("- worker → b/two · available");
+    expect(result.content[0].text).toContain(
+      "- worker → b/two · thinking: high",
+    );
 
     const queried = await harness.tools
       .get("model_switcher_list")
@@ -485,6 +549,14 @@ describe("autocomplete and extension registration", () => {
     expect(queried.details.returned).toEqual(["b/two"]);
     expect(queried.details.totalAliasMatches).toBe(1);
     expect(queried.content[0].text).toContain("Aliases (1):");
+
+    const thinkingQueried = await harness.tools
+      .get("model_switcher_list")
+      .execute("id", { query: "medium" }, undefined, undefined, harness.ctx);
+    expect(thinkingQueried.details.totalAliasMatches).toBe(1);
+    expect(thinkingQueried.details.aliases).toEqual({
+      missing: { model: "c/missing", thinkingLevel: "medium" },
+    });
   });
 
   it("caps models and aliases independently at 200 entries", async () => {
@@ -494,7 +566,10 @@ describe("autocomplete and extension registration", () => {
     const aliases = Object.fromEntries(
       Array.from({ length: 205 }, (_, index) => [
         `alias-${String(index).padStart(3, "0")}`,
-        `provider/model-${String(index).padStart(3, "0")}`,
+        {
+          model: `provider/model-${String(index).padStart(3, "0")}`,
+          thinkingLevel: "high" as const,
+        },
       ]),
     );
     const harness = await extensionHarness({ models, aliases });
@@ -506,7 +581,7 @@ describe("autocomplete and extension registration", () => {
     expect(result.details.returned).toHaveLength(200);
     expect(result.details.truncated).toBe(true);
     expect(result.details.totalAliasMatches).toBe(205);
-    expect(result.details.aliases).toHaveLength(200);
+    expect(Object.keys(result.details.aliases)).toHaveLength(200);
     expect(result.details.aliasesTruncated).toBe(true);
     expect(result.content[0].text).toContain("narrower query");
   });
@@ -540,7 +615,11 @@ describe("autocomplete and extension registration", () => {
     const two = model("b", "two");
     const harness = await extensionHarness({
       models: [one, two],
-      aliases: { smart: "b/two", blocked: "a/one" },
+      scopedModels: [{ model: one }, { model: two, thinkingLevel: "low" }],
+      aliases: {
+        smart: { model: "b/two", thinkingLevel: "high" },
+        blocked: { model: "a/one", thinkingLevel: "medium" },
+      },
       allow: ["b/two"],
     });
     await harness.commands.get("model-switcher").handler("allow", harness.ctx);
@@ -558,6 +637,7 @@ describe("autocomplete and extension registration", () => {
       noop: false,
     });
     expect(harness.setModel).toHaveBeenCalledWith(two);
+    expect(harness.setThinkingLevel).toHaveBeenCalledWith("high");
 
     (harness.ctx as { model: unknown }).model = two;
     harness.setModel.mockClear();
@@ -576,6 +656,129 @@ describe("autocomplete and extension registration", () => {
         .execute("id", { model: "blocked" }, undefined, undefined, harness.ctx),
     ).rejects.toThrow('Alias "blocked" maps to "a/one"');
     expect(harness.setModel).not.toHaveBeenCalled();
+  });
+
+  it("changes thinking for same-model aliases and rejects unsupported presets before mutation", async () => {
+    const one = model("a", "one");
+    const harness = await extensionHarness({
+      models: [one],
+      aliases: {
+        deep: { model: "a/one", thinkingLevel: "low" },
+        unsupported: { model: "a/one", thinkingLevel: "xhigh" },
+      },
+    });
+    await harness.commands.get("model-switcher").handler("allow", harness.ctx);
+
+    const changed = await harness.tools
+      .get("model_switcher")
+      .execute("id", { model: "deep" }, undefined, undefined, harness.ctx);
+    expect(changed.content[0].text).toContain(
+      'Applied alias "deep" to a/one. Thinking: low',
+    );
+    expect(changed.details).toMatchObject({
+      model: "a/one",
+      alias: "deep",
+      thinkingLevel: "low",
+      thinking: "low",
+      noop: false,
+    });
+    expect(harness.setModel).not.toHaveBeenCalled();
+    expect(harness.setThinkingLevel).toHaveBeenCalledWith("low");
+
+    harness.setThinkingLevel.mockClear();
+    await expect(
+      harness.tools
+        .get("model_switcher")
+        .execute(
+          "id",
+          { model: "unsupported" },
+          undefined,
+          undefined,
+          harness.ctx,
+        ),
+    ).rejects.toThrow("does not support it");
+    expect(harness.setModel).not.toHaveBeenCalled();
+    expect(harness.setThinkingLevel).not.toHaveBeenCalled();
+  });
+
+  it("reports graceful alias and provider failures without false success", async () => {
+    const one = model("a", "one");
+    const two = model("b", "two");
+    const unavailable = await extensionHarness({
+      models: [one, two],
+      aliases: { missing: { model: "c/missing", thinkingLevel: "high" } },
+    });
+    await unavailable.commands
+      .get("model-switcher")
+      .handler("allow", unavailable.ctx);
+    await expect(
+      unavailable.tools
+        .get("model_switcher")
+        .execute(
+          "id",
+          { model: "missing" },
+          undefined,
+          undefined,
+          unavailable.ctx,
+        ),
+    ).rejects.toThrow("which is unavailable");
+    expect(unavailable.setModel).not.toHaveBeenCalled();
+
+    const outside = await extensionHarness({
+      models: [one, two],
+      scopedModels: [{ model: one }],
+      aliases: { outside: { model: "b/two", thinkingLevel: "high" } },
+    });
+    await outside.commands.get("model-switcher").handler("allow", outside.ctx);
+    await expect(
+      outside.tools
+        .get("model_switcher")
+        .execute("id", { model: "outside" }, undefined, undefined, outside.ctx),
+    ).rejects.toThrow("outside Pi's native scope");
+    expect(outside.setModel).not.toHaveBeenCalled();
+
+    const unknown = await extensionHarness({ models: [one] });
+    await unknown.commands.get("model-switcher").handler("allow", unknown.ctx);
+    await expect(
+      unknown.tools
+        .get("model_switcher")
+        .execute("id", { model: "mystery" }, undefined, undefined, unknown.ctx),
+    ).rejects.toThrow('Unknown model alias "mystery"');
+
+    const providerFailure = await extensionHarness({ models: [one, two] });
+    await providerFailure.commands
+      .get("model-switcher")
+      .handler("allow", providerFailure.ctx);
+    providerFailure.setModel.mockRejectedValueOnce(new Error("auth"));
+    await expect(
+      providerFailure.tools
+        .get("model_switcher")
+        .execute(
+          "id",
+          { model: "b/two" },
+          undefined,
+          undefined,
+          providerFailure.ctx,
+        ),
+    ).rejects.toThrow("Could not switch");
+  });
+
+  it("rejects unexpected effective thinking levels after alias application", async () => {
+    const one = model("a", "one");
+    const two = model("b", "two");
+    const harness = await extensionHarness({
+      models: [one, two],
+      applyThinking: false,
+      aliases: { deep: { model: "b/two", thinkingLevel: "low" } },
+    });
+    await harness.commands.get("model-switcher").handler("allow", harness.ctx);
+    await expect(
+      harness.tools
+        .get("model_switcher")
+        .execute("id", { model: "deep" }, undefined, undefined, harness.ctx),
+    ).rejects.toThrow("Could not apply alias");
+    expect(harness.setModel).toHaveBeenCalledWith(two);
+    expect(harness.setThinkingLevel).toHaveBeenCalledWith("low");
   });
 
   it("rejects disallowed targets and does not claim false native switches", async () => {

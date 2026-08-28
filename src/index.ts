@@ -1,4 +1,8 @@
 import {
+  getSupportedThinkingLevels,
+  type ModelThinkingLevel,
+} from "@earendil-works/pi-ai";
+import {
   getAgentDir,
   SettingsManager,
   type ExtensionAPI,
@@ -7,10 +11,15 @@ import {
 import { Type } from "typebox";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
 
+export interface ModelAliasPreset {
+  model: string;
+  thinkingLevel: ModelThinkingLevel;
+}
+
 export interface ModelSwitcherSettings {
   allowed?: boolean;
   allow?: "all" | string[];
-  aliases?: Record<string, string>;
+  aliases?: Record<string, ModelAliasPreset>;
 }
 
 export type PermissionSource = "default" | "config" | "flag" | "session";
@@ -20,7 +29,7 @@ export type PermissionAllowPolicy = "all" | string[];
 export interface ResolvedConfiguration {
   allowed: boolean | undefined;
   allow: PermissionAllowPolicy;
-  aliases: Record<string, string>;
+  aliases: Record<string, ModelAliasPreset>;
 }
 
 export interface PermissionResolution {
@@ -46,16 +55,10 @@ export interface CandidateCalculation {
   candidates: CandidateModel[];
 }
 
-export type AliasStatus =
-  | "available"
-  | "blocked-by-allowlist"
-  | "outside-native-scope"
-  | "unavailable";
-
 export interface ModelAlias {
   alias: string;
-  target: string;
-  status: AliasStatus;
+  model: string;
+  thinkingLevel: ModelThinkingLevel;
 }
 
 export interface ModelListDetails {
@@ -64,7 +67,7 @@ export interface ModelListDetails {
   totalMatches: number;
   truncated: boolean;
   noModelsReason?: "scope" | "query" | "available";
-  aliases: ModelAlias[];
+  aliases: Record<string, ModelAliasPreset>;
   totalAliasMatches: number;
   aliasesTruncated: boolean;
   refreshFallback: boolean;
@@ -113,30 +116,67 @@ export function normalizeAliasName(value: string): string | undefined {
   return /^[a-z][a-z0-9_-]{0,63}$/.test(trimmed) ? trimmed : undefined;
 }
 
-/** Normalize alias settings; invalid entries are ignored. */
+const THINKING_LEVELS: readonly ModelThinkingLevel[] = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
+function isThinkingLevel(value: unknown): value is ModelThinkingLevel {
+  return (
+    typeof value === "string" &&
+    THINKING_LEVELS.includes(value as ModelThinkingLevel)
+  );
+}
+
+/** Normalize strict model-and-thinking alias presets; invalid entries are ignored. */
 export function normalizeAliases(
   raw: unknown,
   warnings: string[] = [],
-): Record<string, string> {
+): Record<string, ModelAliasPreset> {
   if (raw === undefined) return {};
   if (!isRecord(raw)) {
     warnings.push("model-switcher: invalid aliases setting; aliases ignored.");
     return {};
   }
 
-  const aliases: Record<string, string> = {};
-  for (const [rawName, rawTarget] of Object.entries(raw)) {
+  const aliases: Record<string, ModelAliasPreset> = {};
+  for (const [rawName, rawPreset] of Object.entries(raw)) {
     const name = normalizeAliasName(rawName);
-    if (!name || typeof rawTarget !== "string") {
+    if (!name || !isRecord(rawPreset)) {
       warnings.push(
         `model-switcher: invalid alias entry "${rawName}"; entry ignored.`,
       );
       continue;
     }
-    const target = normalizeCanonicalIdentifier(rawTarget);
+    const keys = Object.keys(rawPreset);
+    if (
+      keys.length !== 2 ||
+      !hasOwn(rawPreset, "model") ||
+      !hasOwn(rawPreset, "thinkingLevel")
+    ) {
+      warnings.push(
+        `model-switcher: alias "${name}" must contain only model and thinkingLevel; entry ignored.`,
+      );
+      continue;
+    }
+    const target =
+      typeof rawPreset.model === "string"
+        ? normalizeCanonicalIdentifier(rawPreset.model)
+        : undefined;
     if (!target) {
       warnings.push(
-        `model-switcher: invalid alias target for "${name}"; entry ignored.`,
+        `model-switcher: invalid alias model for "${name}"; entry ignored.`,
+      );
+      continue;
+    }
+    if (!isThinkingLevel(rawPreset.thinkingLevel)) {
+      warnings.push(
+        `model-switcher: invalid alias thinkingLevel for "${name}"; entry ignored.`,
       );
       continue;
     }
@@ -146,7 +186,7 @@ export function normalizeAliases(
       );
       continue;
     }
-    aliases[name] = target;
+    aliases[name] = { model: target, thinkingLevel: rawPreset.thinkingLevel };
   }
   return aliases;
 }
@@ -369,36 +409,13 @@ export function calculateCandidates(
   return { availableModels: available, nativeCandidates, candidates };
 }
 
-/** Classify configured aliases against Pi availability, native scope, and allow policy. */
+/** Return configured aliases in deterministic name order. */
 export function calculateAliases(
-  aliases: Readonly<Record<string, string>>,
-  calculation: CandidateCalculation,
+  aliases: Readonly<Record<string, ModelAliasPreset>>,
 ): ModelAlias[] {
-  const available = new Set(
-    calculation.availableModels.map((model) => canonicalModel(model)),
-  );
-  const native = new Set(
-    calculation.nativeCandidates.map((candidate) =>
-      canonicalModel(candidate.model),
-    ),
-  );
-  const permitted = new Set(
-    calculation.candidates.map((candidate) => canonicalModel(candidate.model)),
-  );
-
   return Object.entries(aliases)
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([alias, target]) => ({
-      alias,
-      target,
-      status: !available.has(target)
-        ? "unavailable"
-        : !native.has(target)
-          ? "outside-native-scope"
-          : !permitted.has(target)
-            ? "blocked-by-allowlist"
-            : "available",
-    }));
+    .map(([alias, preset]) => ({ alias, ...preset }));
 }
 
 interface RefreshOutcome {
@@ -508,23 +525,12 @@ function formatCandidate(candidate: CandidateModel): string {
     : `- ${canonical}`;
 }
 
-function aliasStatusLabel(status: AliasStatus): string {
-  switch (status) {
-    case "blocked-by-allowlist":
-      return "blocked by allowlist";
-    case "outside-native-scope":
-      return "outside native scope";
-    default:
-      return status;
-  }
-}
-
 function formatAlias(alias: ModelAlias): string {
-  return `- ${alias.alias} → ${alias.target} · ${aliasStatusLabel(alias.status)}`;
+  return `- ${alias.alias} → ${alias.model} · thinking: ${alias.thinkingLevel}`;
 }
 
 export function formatConfiguredAliases(
-  aliases: Readonly<Record<string, string>>,
+  aliases: Readonly<Record<string, ModelAliasPreset>>,
 ): string {
   const entries = Object.entries(aliases).sort(([left], [right]) =>
     left.localeCompare(right),
@@ -532,7 +538,10 @@ export function formatConfiguredAliases(
   if (entries.length === 0) return "No model aliases configured.";
   return [
     "Model aliases:",
-    ...entries.map(([alias, target]) => `- ${alias} → ${target}`),
+    ...entries.map(
+      ([alias, preset]) =>
+        `- ${alias} → ${preset.model} · thinking: ${preset.thinkingLevel}`,
+    ),
   ].join("\n");
 }
 
@@ -553,7 +562,12 @@ export function formatModelList(
     returned: limited.map((candidate) => canonicalModel(candidate.model)),
     totalMatches,
     truncated: totalMatches > limited.length,
-    aliases: [...limitedAliases],
+    aliases: Object.fromEntries(
+      limitedAliases.map(({ alias, model, thinkingLevel }) => [
+        alias,
+        { model, thinkingLevel },
+      ]),
+    ),
     totalAliasMatches,
     aliasesTruncated: totalAliasMatches > limitedAliases.length,
     refreshFallback,
@@ -853,16 +867,14 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
       assertAuthorized(pi, state, ctx);
       const refresh = await refreshModels(ctx.modelRegistry, signal);
       const calculation = calculateCandidates(ctx, state.configuration.allow);
-      const aliases = calculateAliases(
-        state.configuration.aliases,
-        calculation,
-      );
+      const aliases = calculateAliases(state.configuration.aliases);
       const query = params.query?.trim().toLowerCase() ?? "";
       const filteredAliases = aliases.filter((alias) => {
         if (!query) return true;
         return (
           alias.alias.toLowerCase().includes(query) ||
-          alias.target.toLowerCase().includes(query)
+          alias.model.toLowerCase().includes(query) ||
+          alias.thinkingLevel.toLowerCase().includes(query)
         );
       });
       const filtered = calculation.candidates.filter((candidate) => {
@@ -872,7 +884,7 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
           canonical.includes(query) ||
           displayName(candidate.model).toLowerCase().includes(query) ||
           filteredAliases.some(
-            (alias) => alias.target.toLowerCase() === canonical,
+            (alias) => alias.model.toLowerCase() === canonical,
           )
         );
       });
@@ -916,26 +928,33 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
       assertAuthorized(pi, state, ctx);
       const requested = params.model.trim();
       const aliasTarget = state.configuration.aliases[requested];
-      const resolved = aliasTarget ?? requested;
+      const resolved = aliasTarget?.model ?? requested;
       const calculation = calculateCandidates(ctx, state.configuration.allow);
       const selected = calculation.candidates.find(
         (candidate) => canonicalModel(candidate.model) === resolved,
       );
-      const aliasDetails = aliasTarget
-        ? calculateAliases(state.configuration.aliases, calculation).find(
-            (alias) => alias.alias === requested,
-          )
-        : undefined;
       if (!selected) {
-        if (aliasDetails) {
-          const reason =
-            aliasDetails.status === "unavailable"
-              ? "is unavailable"
-              : aliasDetails.status === "outside-native-scope"
-                ? "is outside Pi's native scope"
-                : "is blocked by the allowlist";
+        if (aliasTarget) {
+          const available = new Set(
+            calculation.availableModels.map((model) => canonicalModel(model)),
+          );
+          const native = new Set(
+            calculation.nativeCandidates.map((candidate) =>
+              canonicalModel(candidate.model),
+            ),
+          );
+          const reason = !available.has(resolved)
+            ? "is unavailable"
+            : !native.has(resolved)
+              ? "is outside Pi's native scope"
+              : "is blocked by the allowlist";
           throw new Error(
             `Alias "${requested}" maps to "${resolved}", which ${reason}. Call model_switcher_list to see current models and aliases.`,
+          );
+        }
+        if (!requested.includes("/")) {
+          throw new Error(
+            `Unknown model alias "${requested}". Call model_switcher_list to see configured aliases.`,
           );
         }
         throw new Error(
@@ -943,21 +962,65 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
         );
       }
 
-      const current = ctx.model ? canonicalModel(ctx.model) : undefined;
       const aliasNote = aliasTarget ? ` via alias "${requested}"` : "";
-      if (current === resolved) {
+      const requestedThinking = aliasTarget?.thinkingLevel;
+      if (
+        requestedThinking !== undefined &&
+        !getSupportedThinkingLevels(selected.model).includes(requestedThinking)
+      ) {
+        throw new Error(
+          `Alias "${requested}" requests thinking level "${requestedThinking}", but "${resolved}" does not support it.`,
+        );
+      }
+
+      const current = ctx.model ? canonicalModel(ctx.model) : undefined;
+      const currentThinking = pi.getThinkingLevel();
+      if (
+        current === resolved &&
+        (requestedThinking === undefined ||
+          currentThinking === requestedThinking)
+      ) {
         return {
           content: [
             {
               type: "text" as const,
-              text: `Already using ${resolved}${aliasNote}. Thinking: ${pi.getThinkingLevel()}`,
+              text: `Already using ${resolved}${aliasNote}. Thinking: ${currentThinking}`,
             },
           ],
           details: {
             model: resolved,
             ...(aliasTarget ? { requested, alias: requested } : {}),
-            thinking: pi.getThinkingLevel(),
+            thinking: currentThinking,
+            ...(requestedThinking !== undefined
+              ? { thinkingLevel: requestedThinking }
+              : {}),
             noop: true,
+          },
+        };
+      }
+
+      if (current === resolved && requestedThinking !== undefined) {
+        pi.setThinkingLevel(requestedThinking);
+        const thinking = pi.getThinkingLevel();
+        if (thinking !== requestedThinking) {
+          throw new Error(
+            `Could not apply alias "${requested}"; requested thinking level "${requestedThinking}" but Pi applied "${thinking}".`,
+          );
+        }
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Applied alias "${requested}" to ${resolved}. Thinking: ${thinking}`,
+            },
+          ],
+          details: {
+            model: resolved,
+            requested,
+            alias: requested,
+            thinking,
+            thinkingLevel: requestedThinking,
+            noop: false,
           },
         };
       }
@@ -975,10 +1038,17 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
           `Could not switch to ${resolved}; the provider may not be authenticated.`,
         );
       }
-      if (selected.thinkingLevel !== undefined) {
+      if (requestedThinking !== undefined) {
+        pi.setThinkingLevel(requestedThinking);
+      } else if (selected.thinkingLevel !== undefined) {
         pi.setThinkingLevel(selected.thinkingLevel);
       }
       const thinking = pi.getThinkingLevel();
+      if (requestedThinking !== undefined && thinking !== requestedThinking) {
+        throw new Error(
+          `Could not apply alias "${requested}"; requested thinking level "${requestedThinking}" but Pi applied "${thinking}".`,
+        );
+      }
       return {
         content: [
           {
@@ -990,6 +1060,9 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
           model: resolved,
           ...(aliasTarget ? { requested, alias: requested } : {}),
           thinking,
+          ...(requestedThinking !== undefined
+            ? { thinkingLevel: requestedThinking }
+            : {}),
           noop: false,
         },
       };
