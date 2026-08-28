@@ -1,0 +1,68 @@
+{
+  "name": "@arcanemachine/pi-model-switcher",
+  "version": "0.0.0",
+  "private": true,
+  "description": "User-authorized agent model switching for Pi sessions",
+  "type": "module",
+  "keywords": [
+    "pi",
+    "pi-coding-agent",
+    "pi-extension",
+    "pi-package",
+    "model-switching"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --exclude '**/dist/**' tests",
+    "format": "prettier --write src/**/*.ts tests/**/*.ts package.json README.md AGENTS.md LICENSE.md",
+    "format:check": "prettier --check src/**/*.ts tests/**/*.ts package.json README.md AGENTS.md LICENSE.md"
+  },
+  "author": "Nicholas Moen",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arcanemachine/pi-model-switcher.git"
+  },
+  "homepage": "https://github.com/arcanemachine/pi-model-switcher#readme",
+  "bugs": {
+    "url": "https://github.com/arcanemachine/pi-model-switcher/issues"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "typebox": "1.3.7"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.1",
+    "@earendil-works/pi-tui": "0.84.1",
+    "@types/node": "^25.3.3",
+    "prettier": "^3.8.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.6"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE.md",
+    "AGENTS.md"
+  ]
+}
