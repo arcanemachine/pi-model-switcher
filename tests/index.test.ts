@@ -513,7 +513,7 @@ describe("autocomplete and extension registration", () => {
       .get("model-switcher")
       .handler("aliases", harness.ctx);
     expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
-      "Model aliases:\n- smart → a/one · thinking: medium\n- worker → b/two · thinking: high",
+      "Model aliases:\n- smart → a/one (medium)\n- worker → b/two (high)",
       "info",
     );
     expect(harness.appendEntry).not.toHaveBeenCalled();
@@ -552,9 +552,8 @@ describe("autocomplete and extension registration", () => {
       .get("model_switcher_whoami")
       .execute("id", {}, undefined, undefined, harness.ctx);
     expect(result.content[0].text).toContain(
-      "Current model: anthropic/claude-sonnet-4-5",
+      "Current model: anthropic/claude-sonnet-4-5 (high)",
     );
-    expect(result.content[0].text).toContain("Thinking: high");
     expect(result.content[0].text).toContain("not allowed");
     expect(result.details.switchingAllowed).toBe(false);
     expect(result.details.name).toBeUndefined();
@@ -607,9 +606,7 @@ describe("autocomplete and extension registration", () => {
     });
     expect(result.details.totalAliasMatches).toBe(2);
     expect(result.content[0].text).toContain("Aliases (2):");
-    expect(result.content[0].text).toContain(
-      "- worker → b/two · thinking: high",
-    );
+    expect(result.content[0].text).toContain("- worker → b/two (high)");
 
     const queried = await harness.tools
       .get("model_switcher_list")
@@ -668,11 +665,7 @@ describe("autocomplete and extension registration", () => {
       .get("model_switcher")
       .execute("id", { model: " b/two " }, undefined, undefined, harness.ctx);
     expect(switched.content[0].text).toContain("Switched to b/two");
-    expect(notify).toHaveBeenCalledOnce();
-    expect(notify).toHaveBeenCalledWith(
-      "Model switched: a/one → b/two · thinking: low",
-      "info",
-    );
+    expect(notify).not.toHaveBeenCalled();
     expect(harness.setModel).toHaveBeenCalledWith(two);
     expect(harness.setThinkingLevel).toHaveBeenCalledWith("low");
 
@@ -707,7 +700,7 @@ describe("autocomplete and extension registration", () => {
       .get("model_switcher")
       .execute("id", { model: "smart" }, undefined, undefined, harness.ctx);
     expect(switched.content[0].text).toContain(
-      'Switched to b/two via alias "smart"',
+      'Switched to b/two (high) via alias "smart"',
     );
     expect(switched.details).toMatchObject({
       model: "b/two",
@@ -717,11 +710,7 @@ describe("autocomplete and extension registration", () => {
     });
     expect(harness.setModel).toHaveBeenCalledWith(two);
     expect(harness.setThinkingLevel).toHaveBeenCalledWith("high");
-    expect(notify).toHaveBeenCalledOnce();
-    expect(notify).toHaveBeenCalledWith(
-      "Model switched: a/one → b/two · thinking: high · alias: smart",
-      "info",
-    );
+    expect(notify).not.toHaveBeenCalled();
 
     (harness.ctx as { model: unknown }).model = two;
     harness.setModel.mockClear();
@@ -730,7 +719,7 @@ describe("autocomplete and extension registration", () => {
       .get("model_switcher")
       .execute("id", { model: "smart" }, undefined, undefined, harness.ctx);
     expect(noop.content[0].text).toContain(
-      'Already using b/two via alias "smart"',
+      'Already using b/two (high) via alias "smart"',
     );
     expect(noop.details.noop).toBe(true);
     expect(harness.setModel).not.toHaveBeenCalled();
@@ -762,7 +751,7 @@ describe("autocomplete and extension registration", () => {
       .get("model_switcher")
       .execute("id", { model: "deep" }, undefined, undefined, harness.ctx);
     expect(changed.content[0].text).toContain(
-      'Applied alias "deep" to a/one. Thinking: low',
+      'Applied alias "deep" to a/one (low).',
     );
     expect(changed.details).toMatchObject({
       model: "a/one",
@@ -773,11 +762,7 @@ describe("autocomplete and extension registration", () => {
     });
     expect(harness.setModel).not.toHaveBeenCalled();
     expect(harness.setThinkingLevel).toHaveBeenCalledWith("low");
-    expect(notify).toHaveBeenCalledOnce();
-    expect(notify).toHaveBeenCalledWith(
-      "Thinking changed: a/one · high → low · alias: deep",
-      "info",
-    );
+    expect(notify).not.toHaveBeenCalled();
 
     harness.setThinkingLevel.mockClear();
     notify.mockClear();

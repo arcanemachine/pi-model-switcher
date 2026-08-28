@@ -78,7 +78,7 @@ If the model is already active, an alias can change only the thinking level. An 
 
 The target model must support the alias's exact thinking level. Unsupported combinations are rejected before any model or thinking mutation; Pi never clamps alias levels. The effective level is checked after application as a defensive invariant.
 
-After a successful state change, the extension shows one user-facing info notification. Model changes identify the previous and new models; same-model alias applications that change only thinking identify the previous and new thinking levels. No-op and failed operations do not notify. The notification is emitted only after the final state is verified and is not an additional agent message.
+After a successful state change, the tool response reports the resulting model and thinking level. The extension does not emit a separate info notification, so the result is not duplicated. No-op and failed operations are not accompanied by a separate notification.
 
 ## Aliases
 

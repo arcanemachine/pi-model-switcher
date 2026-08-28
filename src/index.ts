@@ -542,7 +542,7 @@ function formatCandidate(candidate: CandidateModel): string {
 }
 
 function formatAlias(alias: ModelAlias): string {
-  return `- ${alias.alias} → ${alias.model} · thinking: ${alias.thinkingLevel}`;
+  return `- ${alias.alias} → ${alias.model} (${alias.thinkingLevel})`;
 }
 
 export function formatConfiguredAliases(
@@ -556,7 +556,7 @@ export function formatConfiguredAliases(
     "Model aliases:",
     ...entries.map(
       ([alias, preset]) =>
-        `- ${alias} → ${preset.model} · thinking: ${preset.thinkingLevel}`,
+        `- ${alias} → ${preset.model} (${preset.thinkingLevel})`,
     ),
   ].join("\n");
 }
@@ -639,10 +639,6 @@ export function formatModelList(
 function reportWarning(ctx: ExtensionContext, message: string): void {
   if (ctx.hasUI) ctx.ui.notify(message, "warning");
   else console.warn(message);
-}
-
-function notifyModelSwitch(ctx: ExtensionContext, message: string): void {
-  if (ctx.hasUI) ctx.ui.notify(message, "info");
 }
 
 function loadConfiguration(ctx: ExtensionContext): ResolvedConfiguration {
@@ -852,11 +848,10 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
       const identifier = canonicalModel(current);
       const name = displayName(current);
       const thinking = pi.getThinkingLevel();
-      const lines = [`Current model: ${identifier}`];
+      const lines = [`Current model: ${identifier} (${thinking})`];
       if (name && name !== current.id && name !== identifier) {
         lines.push(`Name: ${name}`);
       }
-      lines.push(`Thinking: ${thinking}`);
       if (!permission.allowed) {
         lines.push(
           "Agent-driven model switching is not allowed for this session. Do not call model_switcher_list or model_switcher unless the user allows it with /model-switcher allow.",
@@ -1016,7 +1011,7 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
           content: [
             {
               type: "text" as const,
-              text: `Already using ${resolved}${aliasNote}. Thinking: ${currentThinking}`,
+              text: `Already using ${resolved} (${currentThinking})${aliasNote}.`,
             },
           ],
           details: {
@@ -1039,15 +1034,11 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
             `Could not apply alias "${requested}"; requested thinking level "${requestedThinking}" but Pi applied "${thinking}".`,
           );
         }
-        notifyModelSwitch(
-          ctx,
-          `Thinking changed: ${resolved} · ${currentThinking} → ${thinking} · alias: ${requested}`,
-        );
         return {
           content: [
             {
               type: "text" as const,
-              text: `Applied alias "${requested}" to ${resolved}. Thinking: ${thinking}`,
+              text: `Applied alias "${requested}" to ${resolved} (${thinking}).`,
             },
           ],
           details: {
@@ -1085,15 +1076,11 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
           `Could not apply alias "${requested}"; requested thinking level "${requestedThinking}" but Pi applied "${thinking}".`,
         );
       }
-      notifyModelSwitch(
-        ctx,
-        `Model switched: ${current ?? "unavailable"} → ${resolved} · thinking: ${thinking}${aliasTarget ? ` · alias: ${requested}` : ""}`,
-      );
       return {
         content: [
           {
             type: "text" as const,
-            text: `Switched to ${resolved}${aliasNote}. Thinking: ${thinking}`,
+            text: `Switched to ${resolved} (${thinking})${aliasNote}.`,
           },
         ],
         details: {
