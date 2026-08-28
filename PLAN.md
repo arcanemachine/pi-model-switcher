@@ -16,13 +16,14 @@ The implementation owner must create the package contents. The superproject must
 
 ## Objective
 
-Create a small Pi extension that lets an agent list and select models only when the user has authorized agent-driven model switching for the current session.
+Create a small Pi extension that lets an agent identify its current model at any time and list or select models only when the user has authorized agent-driven model switching for the current session.
 
 The extension must:
 
-- register two always-active agent tools, `model_switcher_list` and `model_switcher`;
-- keep both tool definitions stable across permission changes so enabling or disabling the capability does not alter the active tool set or invalidate the prompt cache for that reason;
-- enforce one shared runtime permission gate before either tool can list or switch models;
+- register three always-active agent tools, `model_switcher_whoami`, `model_switcher_list`, and `model_switcher`;
+- keep all three tool definitions stable across permission changes so enabling or disabling the capability does not alter the active tool set or invalidate the prompt cache for that reason;
+- keep `model_switcher_whoami` read-only and available regardless of switching permission;
+- enforce one shared runtime permission gate before `model_switcher_list` can disclose candidates or `model_switcher` can select one;
 - use Pi-native model scope, model registry, model refresh, model switching, thinking-level handling, events, session entries, extension flags, and UI primitives wherever they provide the required behavior;
 - default to disabled when no setting, flag, or session override enables it;
 - support global and trusted-project configuration, CLI overrides for newly created sessions, and persistent current-session overrides through `/model-switcher`;
@@ -34,6 +35,7 @@ The extension must:
 
 ### Tool and command names
 
+- Agent-facing identity tool: `model_switcher_whoami`
 - Agent-facing list tool: `model_switcher_list`
 - Agent-facing switching tool: `model_switcher`
 - User-facing slash command: `/model-switcher`
@@ -262,26 +264,66 @@ For unknown arguments, issue a concise error notification with the valid usage. 
 
 ### Stable tools and prompt-cache boundary
 
-Register both tools exactly once during extension initialization and leave both active for the entire extension runtime. Never call `pi.setActiveTools()` to implement permission changes.
+Register all three tools exactly once during extension initialization and leave all three active for the entire extension runtime. Never call `pi.setActiveTools()` to implement permission changes.
 
-Do not add `promptSnippet` or `promptGuidelines`. They would add unnecessary system-prompt content and are not needed for this capability. Keep the required permission note in each tool’s ordinary description, which is already part of its stable schema.
+Do not add `promptSnippet` or `promptGuidelines`. They would add unnecessary system-prompt content and are not needed for this capability. Keep the required permission note for the gated tools in each tool’s ordinary description, which is already part of its stable schema.
 
 Suggested concise descriptions:
 
+- `model_switcher_whoami`: `Report the current Pi model and thinking level.`
 - `model_switcher_list`: `List models available to model_switcher. Requires user authorization for agent-driven model switching.`
 - `model_switcher`: `Switch this session to an available provider/model. Requires user authorization for agent-driven model switching.`
 
-Both tools must use the same permission-check helper before any model discovery, refresh, query evaluation, validation, or mutation. When disabled, throw an error so Pi marks the tool result as an error and the agent cannot mistake the operation for success.
+`model_switcher_list` and `model_switcher` must use the same permission-check helper before any model discovery, refresh, query evaluation, validation, or mutation. When disabled, throw an error so Pi marks the tool result as an error and the agent cannot mistake the operation for success. `model_switcher_whoami` must not use this refusal gate.
 
-Use this concise refusal guidance, or wording with the same meaning and no additional policy:
+Use this concise refusal guidance for the two gated tools, or wording with the same meaning and no additional policy:
 
 ```text
-Agent-driven model switching is disabled for this session. Only the user can enable it with /model-switcher enable. If the user asked you to switch models, ask them to enable it; otherwise do not retry either model-switcher tool.
+Agent-driven model switching is disabled for this session. Only the user can enable it with /model-switcher enable. If the user asked you to switch models, ask them to enable it; otherwise do not retry model_switcher_list or model_switcher.
 ```
 
-The detailed corrective guidance must appear only in the failed tool result, not in permanent prompt guidelines.
+The detailed corrective guidance must appear only in a failed gated-tool result, not in permanent prompt guidelines.
 
-Mark both tools `executionMode: "sequential"` so catalog refresh and model mutation cannot race other calls to these tools in the same tool batch.
+Mark all three tools `executionMode: "sequential"` so identity reporting, catalog refresh, and model mutation have deterministic ordering when they appear in the same tool batch.
+
+### `model_switcher_whoami` contract
+
+Schema:
+
+```typescript
+{
+}
+```
+
+This tool exists for the executing model to learn its current Pi identity. It is read-only and always callable, including while agent-driven model switching is disabled.
+
+Use Pi’s live extension state:
+
+- canonical identity from `ctx.model.provider` and `ctx.model.id`;
+- optional display name from `ctx.model.name`;
+- effective thinking level from `pi.getThinkingLevel()`.
+
+Do not use `process.env.PI_PROVIDER`, `process.env.PI_MODEL`, or `process.env.PI_REASONING_LEVEL`. Those values are shell-execution environment facilities, not the authoritative extension-session state contract.
+
+Return concise text such as:
+
+```text
+Current model: anthropic/claude-sonnet-4-5
+Name: Claude Sonnet 4.5
+Thinking: high
+```
+
+Omit `Name` when the display name is empty or merely repeats the model ID. If no current model exists, throw a concise error rather than returning invented identity data.
+
+Include canonical provider/model, optional non-redundant display name, effective thinking level, and current switching-enabled boolean in structured `details`.
+
+When switching is disabled, the identity lookup still succeeds but must append this concise nudge, or wording with the same meaning:
+
+```text
+Agent-driven model switching is not authorized for this session. Do not call model_switcher_list or model_switcher unless the user enables it with /model-switcher enable.
+```
+
+When switching is enabled, do not add permission narration to the text result. Never expose the candidate model list through `model_switcher_whoami`. On a continuation after a successful switch, the tool must report the newly current model through the same live Pi state.
 
 ### `model_switcher_list` contract
 
@@ -447,7 +489,8 @@ Document:
 
 - what the extension does;
 - the opt-in security/cost posture;
-- the two agent tools and their authorization boundary;
+- the three agent tools, including the always-available identity tool and the authorization boundary around listing/switching;
+- that `model_switcher_whoami` uses live Pi model state, remains available while switching is disabled, and adds a concise unauthorized nudge in that state;
 - `/model-switcher`, including no-argument status and enable/disable forms;
 - both CLI flags and deny-wins conflict behavior;
 - global and trusted-project settings paths;
@@ -574,21 +617,26 @@ At minimum, cover these deterministic cases.
 - refresh timeout/failure falls back to cached data and reports that concisely;
 - abort/timeout resources are cleaned up.
 
-### Tool authorization and switching
+### Tool authorization, identity, and switching
 
-- both tool definitions remain registered regardless of enabled state;
-- neither tool calls `pi.setActiveTools()`;
-- both tools reject before list discovery or model validation when disabled;
-- both use the same approved refusal guidance;
+- all three tool definitions remain registered regardless of enabled state;
+- no model-switcher tool calls `pi.setActiveTools()`;
+- list and switch reject before discovery or model validation when disabled;
+- list and switch use the same approved refusal guidance;
 - list discloses no model inventory while disabled;
+- whoami succeeds while switching is disabled and appends the approved unauthorized nudge;
+- whoami omits the nudge while switching is enabled;
+- whoami reads `ctx.model` and `pi.getThinkingLevel()` rather than process environment variables;
+- whoami reports canonical identity, omits a redundant display name, and fails cleanly if no model exists;
+- whoami structured details include the current switching-enabled boolean without dumping policy configuration;
 - unavailable or disallowed exact target fails with list-tool guidance;
 - current-model selection is a no-op;
 - successful selection calls `pi.setModel()` once;
 - a false/failed native set does not report success;
 - a scoped pinned thinking level is applied after model selection;
 - an unpinned entry relies on native model thinking behavior;
-- tools are sequential;
-- descriptions remain concise and include the authorization requirement;
+- all tools are sequential;
+- descriptions remain concise, with the authorization requirement only on the gated tools;
 - no prompt snippet or prompt guideline is registered.
 
 ### Command behavior
@@ -649,16 +697,17 @@ Verify at least:
 
 1. Default startup with no setting/flag is disabled.
 2. `/model-switcher` shows the concise default status with no confusing source label.
-3. Both tools remain present while disabled.
-4. Calling either tool while disabled returns the approved permission guidance and the list tool exposes no models.
-5. `/model-switcher enable` shows the exact user notification and conveys the hidden agent message.
-6. Authorized `model_switcher_list` returns only models inside Pi scope and the configured allow policy; query and refresh fallback behavior work.
-7. An authorized switch to a user-approved test target takes effect on the following model continuation and Pi records its native model/thinking entries.
-8. A disallowed or out-of-scope target is rejected.
-9. `/model-switcher disable` immediately restores both tool gates without removing either tool.
-10. Resume/reload restores an explicit toggle; `/new` and fork reapply baseline permission.
-11. `--model-switcher-allow`, `--model-switcher-deny`, and the both-flags deny-wins case establish the correct new-session baseline.
-12. Global and trusted-project settings merge as documented, including project `allow: "all"` overriding a global array.
+3. All three tools remain present while disabled.
+4. `model_switcher_whoami` reports the current canonical identity and thinking level while disabled, adds the unauthorized nudge, and exposes no candidate inventory.
+5. Calling `model_switcher_list` or `model_switcher` while disabled returns the approved permission guidance, and the list tool exposes no models.
+6. `/model-switcher enable` shows the exact user notification and conveys the hidden agent message.
+7. Authorized `model_switcher_list` returns only models inside Pi scope and the configured allow policy; query and refresh fallback behavior work.
+8. An authorized switch to a user-approved test target takes effect on the following model continuation, Pi records its native model/thinking entries, and a subsequent `model_switcher_whoami` reports the new identity without the unauthorized nudge.
+9. A disallowed or out-of-scope target is rejected.
+10. `/model-switcher disable` immediately restores both gated-tool refusals without removing any of the three tools; whoami remains available and regains the nudge.
+11. Resume/reload restores an explicit toggle; `/new` and fork reapply baseline permission.
+12. `--model-switcher-allow`, `--model-switcher-deny`, and the both-flags deny-wins case establish the correct new-session baseline.
+13. Global and trusted-project settings merge as documented, including project `allow: "all"` overriding a global array.
 
 Because this is user-facing behavior, obtain explicit user approval of the observed runtime behavior, or an explicit user-initiated waiver, before accepting the implementation, recording completion, or finalizing integration. If runtime behavior differs from this plan, fix it and repeat the affected checks rather than documenting the discrepancy as acceptable.
 
@@ -666,7 +715,7 @@ Because this is user-facing behavior, obtain explicit user approval of the obser
 
 ### In scope
 
-- The two agent tools
+- The three agent tools
 - The one user command and its autocomplete
 - The two boolean CLI flags
 - Global/trusted-project settings resolution
@@ -689,7 +738,7 @@ Because this is user-facing behavior, obtain explicit user approval of the obser
 
 Stop and return to the user if:
 
-- Pi’s current APIs cannot keep both tools active while enforcing the runtime gate;
+- Pi’s current APIs cannot keep all three tools active while enforcing the runtime gate only on list/switch;
 - selecting a model from a tool cannot safely affect the next model continuation;
 - the existing child repository cannot be registered as a submodule without destructive replacement;
 - implementation requires a new runtime dependency not named in this plan;
