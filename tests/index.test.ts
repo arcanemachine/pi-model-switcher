@@ -527,7 +527,7 @@ describe("autocomplete and extension registration", () => {
     expect([...harness.tools.keys()]).toEqual([
       "model_switcher_whoami",
       "model_switcher_list",
-      "model_switcher",
+      "model_switcher_switch",
     ]);
     expect(
       [...harness.tools.values()].every(
@@ -647,7 +647,7 @@ describe("autocomplete and extension registration", () => {
     const notify = harness.ctx.ui.notify as ReturnType<typeof vi.fn>;
     notify.mockClear();
     const switched = await harness.tools
-      .get("model_switcher")
+      .get("model_switcher_switch")
       .execute("id", { model: " b/two " }, undefined, undefined, harness.ctx);
     expect(switched.content[0].text).toContain("Switched to b/two");
     expect(notify).not.toHaveBeenCalled();
@@ -658,7 +658,7 @@ describe("autocomplete and extension registration", () => {
     harness.setModel.mockClear();
     notify.mockClear();
     const noop = await harness.tools
-      .get("model_switcher")
+      .get("model_switcher_switch")
       .execute("id", { model: "b/two" }, undefined, undefined, harness.ctx);
     expect(noop.details.noop).toBe(true);
     expect(harness.setModel).not.toHaveBeenCalled();
@@ -682,7 +682,7 @@ describe("autocomplete and extension registration", () => {
     notify.mockClear();
 
     const switched = await harness.tools
-      .get("model_switcher")
+      .get("model_switcher_switch")
       .execute("id", { model: "smart" }, undefined, undefined, harness.ctx);
     expect(switched.content[0].text).toContain(
       'Switched to b/two (high) via alias "smart"',
@@ -701,7 +701,7 @@ describe("autocomplete and extension registration", () => {
     harness.setModel.mockClear();
     notify.mockClear();
     const noop = await harness.tools
-      .get("model_switcher")
+      .get("model_switcher_switch")
       .execute("id", { model: "smart" }, undefined, undefined, harness.ctx);
     expect(noop.content[0].text).toContain(
       'Already using b/two (high) via alias "smart"',
@@ -712,7 +712,7 @@ describe("autocomplete and extension registration", () => {
 
     await expect(
       harness.tools
-        .get("model_switcher")
+        .get("model_switcher_switch")
         .execute("id", { model: "blocked" }, undefined, undefined, harness.ctx),
     ).rejects.toThrow('Alias "blocked" maps to "a/one"');
     expect(harness.setModel).not.toHaveBeenCalled();
@@ -733,7 +733,7 @@ describe("autocomplete and extension registration", () => {
     notify.mockClear();
 
     const changed = await harness.tools
-      .get("model_switcher")
+      .get("model_switcher_switch")
       .execute("id", { model: "deep" }, undefined, undefined, harness.ctx);
     expect(changed.content[0].text).toContain(
       'Applied alias "deep" to a/one (low).',
@@ -753,7 +753,7 @@ describe("autocomplete and extension registration", () => {
     notify.mockClear();
     await expect(
       harness.tools
-        .get("model_switcher")
+        .get("model_switcher_switch")
         .execute(
           "id",
           { model: "unsupported" },
@@ -783,7 +783,7 @@ describe("autocomplete and extension registration", () => {
     unavailableNotify.mockClear();
     await expect(
       unavailable.tools
-        .get("model_switcher")
+        .get("model_switcher_switch")
         .execute(
           "id",
           { model: "missing" },
@@ -805,7 +805,7 @@ describe("autocomplete and extension registration", () => {
     outsideNotify.mockClear();
     await expect(
       outside.tools
-        .get("model_switcher")
+        .get("model_switcher_switch")
         .execute("id", { model: "outside" }, undefined, undefined, outside.ctx),
     ).rejects.toThrow("outside Pi's native scope");
     expect(outside.setModel).not.toHaveBeenCalled();
@@ -817,7 +817,7 @@ describe("autocomplete and extension registration", () => {
     unknownNotify.mockClear();
     await expect(
       unknown.tools
-        .get("model_switcher")
+        .get("model_switcher_switch")
         .execute("id", { model: "mystery" }, undefined, undefined, unknown.ctx),
     ).rejects.toThrow('Unknown model alias "mystery"');
     expect(unknownNotify).not.toHaveBeenCalled();
@@ -833,7 +833,7 @@ describe("autocomplete and extension registration", () => {
     providerFailure.setModel.mockRejectedValueOnce(new Error("auth"));
     await expect(
       providerFailure.tools
-        .get("model_switcher")
+        .get("model_switcher_switch")
         .execute(
           "id",
           { model: "b/two" },
@@ -858,7 +858,7 @@ describe("autocomplete and extension registration", () => {
     notify.mockClear();
     await expect(
       harness.tools
-        .get("model_switcher")
+        .get("model_switcher_switch")
         .execute("id", { model: "deep" }, undefined, undefined, harness.ctx),
     ).rejects.toThrow("Could not apply alias");
     expect(harness.setModel).toHaveBeenCalledWith(two);
@@ -874,7 +874,7 @@ describe("autocomplete and extension registration", () => {
     const originalRefresh = harness.refresh;
     await expect(
       harness.tools
-        .get("model_switcher")
+        .get("model_switcher_switch")
         .execute(
           "id",
           { model: "b/missing" },
@@ -887,7 +887,7 @@ describe("autocomplete and extension registration", () => {
     harness.setModel.mockResolvedValueOnce(false);
     await expect(
       harness.tools
-        .get("model_switcher")
+        .get("model_switcher_switch")
         .execute("id", { model: "b/two" }, undefined, undefined, harness.ctx),
     ).rejects.toThrow("Could not switch");
   });

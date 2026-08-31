@@ -81,12 +81,12 @@ const PERMISSION_CHANGE_MESSAGE_TYPE = "pi-model-switcher:permission-change";
 const REFRESH_TIMEOUT_MS = 15_000;
 
 export const MODEL_SWITCHER_PERMISSION_GUIDANCE =
-  "Agent-driven model switching is denied for this session. Only the user can allow it with /model-switcher allow. If the user asked you to switch models, ask them to allow it; otherwise do not retry model_switcher_list or model_switcher.";
+  "Agent-driven model switching is denied for this session. Only the user can allow it with /model-switcher allow. If the user asked you to switch models, ask them to allow it; otherwise do not retry model_switcher_list or model_switcher_switch.";
 
 const ALLOWED_MESSAGE =
-  "Agent-driven model switching is now allowed for this session. You may use model_switcher_list and model_switcher when appropriate.";
+  "Agent-driven model switching is now allowed for this session. You may use model_switcher_list and model_switcher_switch when appropriate.";
 const DENIED_MESSAGE =
-  "Agent-driven model switching is now denied for this session. Do not use model_switcher_list or model_switcher unless the user allows it again.";
+  "Agent-driven model switching is now denied for this session. Do not use model_switcher_list or model_switcher_switch unless the user allows it again.";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -842,7 +842,7 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
       }
       if (!permission.allowed) {
         lines.push(
-          "Agent-driven model switching is not allowed for this session. Do not call model_switcher_list or model_switcher unless the user allows it with /model-switcher allow.",
+          "Agent-driven model switching is not allowed for this session. Do not call model_switcher_list or model_switcher_switch unless the user allows it with /model-switcher allow.",
         );
       }
       return {
@@ -867,7 +867,7 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
     name: "model_switcher_list",
     label: "List Models and Aliases",
     description:
-      "List available models and configured aliases for model_switcher. Requires user authorization for agent-driven model switching.",
+      "List available models and configured aliases for model_switcher_switch. Requires user authorization for agent-driven model switching.",
     parameters: Type.Object({}),
     executionMode: "sequential",
     async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
@@ -904,7 +904,7 @@ export default function modelSwitcherExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerTool({
-    name: "model_switcher",
+    name: "model_switcher_switch",
     label: "Switch Model",
     description:
       "Switch this session to an available provider/model or configured alias. Requires user authorization for agent-driven model switching.",
