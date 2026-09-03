@@ -1,6 +1,6 @@
 {
   "name": "@arcanemachine/pi-model-switcher",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "User-authorized agent model switching for Pi sessions",
   "type": "module",
   "keywords": [

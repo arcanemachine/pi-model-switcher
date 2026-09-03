@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1 - 2026-09-03
+
+- Improve `model_switcher_list` readability with spacing between the current model, aliases, and available models.
+
 ## 0.1.0 - 2026-08-28
 
 - Add user-authorized agent-driven model switching with `model_switcher_whoami`, `model_switcher_list`, and `model_switcher_switch`.
