@@ -605,8 +605,19 @@ describe("autocomplete and extension registration", () => {
       worker: { model: "b/two", thinkingLevel: "high" },
     });
     expect(result.details.totalAliasMatches).toBe(2);
-    expect(result.content[0].text).toContain("Aliases (2):");
-    expect(result.content[0].text).toContain("- worker → b/two (high)");
+    expect(result.content[0].text).toBe(
+      [
+        "Current: a/one",
+        "",
+        "Aliases (2):",
+        "- missing → c/missing (medium)",
+        "- worker → b/two (high)",
+        "",
+        "Available models (2):",
+        "- a/one — Alpha",
+        "- b/two — Beta",
+      ].join("\n"),
+    );
   });
 
   it("caps models and aliases independently at 200 entries", async () => {

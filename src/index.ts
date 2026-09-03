@@ -597,7 +597,7 @@ export function formatModelList(
       : {}),
   };
 
-  const lines: string[] = [`Current: ${current ?? "unavailable"}`];
+  const lines: string[] = [`Current: ${current ?? "unavailable"}`, ""];
   lines.push(`Aliases (${totalAliasMatches}):`);
   if (limitedAliases.length > 0) lines.push(...limitedAliases.map(formatAlias));
   if (totalAliasMatches === 0) lines.push("No aliases configured.");
@@ -607,7 +607,7 @@ export function formatModelList(
     );
   }
 
-  lines.push(`Available models (${totalMatches}):`);
+  lines.push("", `Available models (${totalMatches}):`);
   if (limited.length > 0) lines.push(...limited.map(formatCandidate));
   if (totalMatches > limited.length) {
     lines.push(
